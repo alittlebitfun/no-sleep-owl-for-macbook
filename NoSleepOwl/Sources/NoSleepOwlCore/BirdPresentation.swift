@@ -16,7 +16,7 @@ public struct BirdPresentation: Equatable, Sendable {
         case .owl:
             emoji = "🦉"
             statusTitle = "猫头鹰正在守夜"
-            detail = "屏幕可以熄灭，后台任务会继续运行"
+            detail = "合盖后网络与应用继续运行 · 请保持通风，勿放入包中"
             toggleTitle = "切换到小鸟模式"
         }
     }

@@ -88,6 +88,23 @@ test("duration formatter covers seconds minutes and hours") {
     try expect(OwlDurationFormatter.string(seconds: 3661) == "01:01:01", "wrong hour duration")
 }
 
+test("closed-lid helper restores the original sleep setting") {
+    let script = ClosedLidHelperScript.make(markerPath: "/tmp/owl marker", appPID: 123, restoreValue: 0)
+    try expect(script.contains("pmset -a disablesleep 1"), "helper must disable lid sleep")
+    try expect(script.contains("kill -0 123"), "helper must monitor the app")
+    try expect(script.contains("pmset -a disablesleep 0"), "helper must restore the original value")
+    try expect(script.contains("'/tmp/owl marker'"), "marker path must be shell quoted")
+    try expect(script.contains("trap cleanup"), "helper must clean up on termination")
+    try expect(script.contains("/bin/test -e"), "helper must use the macOS test binary path")
+    try expect(!script.contains("/usr/bin/test"), "helper must not use a missing binary")
+}
+
+test("closed-lid launcher avoids nohup in administrator context") {
+    let command = ClosedLidHelperScript.launchCommand(script: "echo ready", logPath: "/tmp/owl.log")
+    try expect(!command.contains("nohup"), "macOS nohup cannot detach in the authorization shell")
+    try expect(command.hasSuffix("</dev/null &"), "helper must run in background with detached input")
+}
+
 if failures > 0 {
     print("\(failures) TEST(S) FAILED")
     exit(1)
