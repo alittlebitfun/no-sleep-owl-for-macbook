@@ -105,6 +105,34 @@ test("closed-lid launcher avoids nohup in administrator context") {
     try expect(command.hasSuffix("</dev/null &"), "helper must run in background with detached input")
 }
 
+test("AC-only policy exits when power is unplugged") {
+    var policy = SafetyPolicy()
+    let decision = policy.evaluate(SafetySnapshot(policy: .acOnly, isOnACPower: false, batteryPercent: 80, thermalState: .nominal))
+    try expect(decision == .exitOwl(reason: .powerDisconnected), "expected unplug exit")
+}
+
+test("battery policy warns once at twenty percent") {
+    var policy = SafetyPolicy()
+    let snapshot = SafetySnapshot(policy: .allowBattery, isOnACPower: false, batteryPercent: 20, thermalState: .nominal)
+    try expect(policy.evaluate(snapshot) == .warn(.lowBattery), "expected low battery warning")
+    try expect(policy.evaluate(snapshot) == .none, "warning must fire once")
+}
+
+test("battery policy exits at ten percent") {
+    var policy = SafetyPolicy()
+    let decision = policy.evaluate(SafetySnapshot(policy: .allowBattery, isOnACPower: false, batteryPercent: 10, thermalState: .nominal))
+    try expect(decision == .exitOwl(reason: .criticalBattery), "expected critical battery exit")
+}
+
+test("thermal policy warns at serious and exits at critical") {
+    var policy = SafetyPolicy()
+    let serious = SafetySnapshot(policy: .allowBattery, isOnACPower: true, batteryPercent: 100, thermalState: .serious)
+    let critical = SafetySnapshot(policy: .allowBattery, isOnACPower: true, batteryPercent: 100, thermalState: .critical)
+    try expect(policy.evaluate(serious) == .warn(.thermalSerious), "expected thermal warning")
+    try expect(policy.evaluate(serious) == .none, "thermal warning must fire once")
+    try expect(policy.evaluate(critical) == .exitOwl(reason: .thermalCritical), "expected thermal exit")
+}
+
 if failures > 0 {
     print("\(failures) TEST(S) FAILED")
     exit(1)
