@@ -133,6 +133,28 @@ test("thermal policy warns at serious and exits at critical") {
     try expect(policy.evaluate(critical) == .exitOwl(reason: .thermalCritical), "expected thermal exit")
 }
 
+test("helper restores after fifteen seconds without heartbeat") {
+    var helper = HelperStateMachine(timeout: 15)
+    try expect(helper.enable(now: 100, originalValue: 0) == .setSleepDisabled(1), "enable must set one")
+    try expect(helper.tick(now: 114.9) == .none, "must remain enabled before timeout")
+    try expect(helper.tick(now: 115) == .setSleepDisabled(0), "must restore at timeout")
+}
+
+test("helper heartbeat extends the deadline") {
+    var helper = HelperStateMachine(timeout: 15)
+    _ = helper.enable(now: 100, originalValue: 0)
+    helper.heartbeat(now: 110)
+    try expect(helper.tick(now: 120) == .none, "heartbeat must extend deadline")
+    try expect(helper.tick(now: 125) == .setSleepDisabled(0), "extended deadline must restore")
+}
+
+test("helper disable restores original value") {
+    var helper = HelperStateMachine(timeout: 15)
+    _ = helper.enable(now: 0, originalValue: 1)
+    try expect(helper.disable() == .setSleepDisabled(1), "disable must restore original value")
+    try expect(helper.isEnabled == false, "helper must be disabled")
+}
+
 if failures > 0 {
     print("\(failures) TEST(S) FAILED")
     exit(1)
