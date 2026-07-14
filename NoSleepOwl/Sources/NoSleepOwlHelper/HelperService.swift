@@ -1,5 +1,6 @@
 import Foundation
 import NoSleepOwlCore
+import Darwin
 
 final class HelperService: NSObject, NoSleepOwlXPCProtocol, @unchecked Sendable {
     private let lock = NSLock()
@@ -80,12 +81,22 @@ final class HelperListenerDelegate: NSObject, NSXPCListenerDelegate, @unchecked 
     init(service: HelperService) { self.service = service }
 
     func listener(_ listener: NSXPCListener, shouldAcceptNewConnection connection: NSXPCConnection) -> Bool {
-        guard connection.effectiveUserIdentifier != 0 else { return false }
+        guard connection.effectiveUserIdentifier != 0, trustedClientPath(connection.processIdentifier) else { return false }
         connection.exportedInterface = NSXPCInterface(with: NoSleepOwlXPCProtocol.self)
         connection.exportedObject = service
         connection.invalidationHandler = { [weak service] in service?.clientDisconnected() }
         connection.interruptionHandler = { [weak service] in service?.clientDisconnected() }
         connection.resume()
         return true
+    }
+
+    private func trustedClientPath(_ pid: pid_t) -> Bool {
+        var buffer = [CChar](repeating: 0, count: 4096)
+        let length = buffer.withUnsafeMutableBytes { bytes in
+            proc_pidpath(pid, bytes.baseAddress, UInt32(bytes.count))
+        }
+        guard length > 0 else { return false }
+        let path = String(decoding: buffer.prefix(Int(length)).map { UInt8(bitPattern: $0) }, as: UTF8.self)
+        return path == "/Applications/不休眠猫头鹰.app/Contents/MacOS/NoSleepOwlApp"
     }
 }

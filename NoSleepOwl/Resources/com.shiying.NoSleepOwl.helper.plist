@@ -3,7 +3,7 @@
 <plist version="1.0">
 <dict>
     <key>Label</key><string>com.shiying.NoSleepOwl.helper</string>
-    <key>BundleProgram</key><string>Contents/MacOS/NoSleepOwlHelper</string>
+    <key>BundleProgram</key><string>Contents/Resources/NoSleepOwlHelper</string>
     <key>MachServices</key>
     <dict><key>com.shiying.NoSleepOwl.helper</key><true/></dict>
     <key>RunAtLoad</key><true/>

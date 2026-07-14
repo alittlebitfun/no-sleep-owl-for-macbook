@@ -36,7 +36,7 @@ final class PrivilegedSleepController: SleepAssertionControlling {
     var isReady: Bool { service.status == .enabled }
 
     func register() throws {
-        if service.status == .notRegistered { try service.register() }
+        if service.status == .notRegistered || service.status == .notFound { try service.register() }
         if service.status == .requiresApproval {
             SMAppService.openSystemSettingsLoginItems()
             throw PrivilegedSleepError.needsApproval

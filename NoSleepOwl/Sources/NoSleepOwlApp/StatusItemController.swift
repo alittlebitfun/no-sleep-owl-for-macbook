@@ -7,7 +7,7 @@ final class StatusItemController: NSObject {
     private let launchController: LaunchAtLoginController
     private let openWindow: () -> Void
     private let quit: () -> Void
-    private let statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+    private let statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
 
     init(store: OwlModeStore, launchController: LaunchAtLoginController, openWindow: @escaping () -> Void, quit: @escaping () -> Void) {
         self.store = store
@@ -25,7 +25,9 @@ final class StatusItemController: NSObject {
 
     func refresh() {
         let presentation = BirdPresentation(mode: store.mode)
-        statusItem.button?.title = presentation.emoji
+        statusItem.button?.title = ""
+        statusItem.button?.image = BirdIconRenderer.image(for: store.mode)
+        statusItem.button?.imagePosition = .imageOnly
         statusItem.button?.toolTip = "不休眠猫头鹰 · \(presentation.statusTitle)"
     }
 

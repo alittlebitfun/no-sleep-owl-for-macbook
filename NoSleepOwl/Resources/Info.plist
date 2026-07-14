@@ -10,8 +10,8 @@
     <key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
     <key>CFBundleName</key><string>不休眠猫头鹰</string>
     <key>CFBundlePackageType</key><string>APPL</string>
-    <key>CFBundleShortVersionString</key><string>1.0</string>
-    <key>CFBundleVersion</key><string>1</string>
+    <key>CFBundleShortVersionString</key><string>2.0</string>
+    <key>CFBundleVersion</key><string>2</string>
     <key>LSMinimumSystemVersion</key><string>15.0</string>
     <key>LSUIElement</key><true/>
     <key>NSHumanReadableCopyright</key><string>© 2026</string>
