@@ -1,0 +1,12 @@
+{
+  "": {
+    "swift-dependencies": "/Users/Zhuanz1/Documents/.Agent07-worktrees/no-sleep-owl/NoSleepOwl/.build/arm64-apple-macosx/debug/NoSleepOwlPackageTests.build/master.swiftdeps"
+  },
+  "/Users/Zhuanz1/Documents/.Agent07-worktrees/no-sleep-owl/NoSleepOwl/.build/arm64-apple-macosx/debug/NoSleepOwlPackageTests.derived/runner.swift": {
+    "dependencies": "/Users/Zhuanz1/Documents/.Agent07-worktrees/no-sleep-owl/NoSleepOwl/.build/arm64-apple-macosx/debug/NoSleepOwlPackageTests.build/runner.d",
+    "object": "/Users/Zhuanz1/Documents/.Agent07-worktrees/no-sleep-owl/NoSleepOwl/.build/arm64-apple-macosx/debug/NoSleepOwlPackageTests.build/runner.swift.o",
+    "swiftmodule": "/Users/Zhuanz1/Documents/.Agent07-worktrees/no-sleep-owl/NoSleepOwl/.build/arm64-apple-macosx/debug/NoSleepOwlPackageTests.build/runner~partial.swiftmodule",
+    "swift-dependencies": "/Users/Zhuanz1/Documents/.Agent07-worktrees/no-sleep-owl/NoSleepOwl/.build/arm64-apple-macosx/debug/NoSleepOwlPackageTests.build/runner.swiftdeps",
+    "diagnostics": "/Users/Zhuanz1/Documents/.Agent07-worktrees/no-sleep-owl/NoSleepOwl/.build/arm64-apple-macosx/debug/NoSleepOwlPackageTests.build/runner.dia"
+  }
+}

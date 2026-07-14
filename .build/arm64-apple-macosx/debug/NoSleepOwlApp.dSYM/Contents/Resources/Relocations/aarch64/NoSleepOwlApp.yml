@@ -1,0 +1,5 @@
+---
+triple:          'arm64-apple-darwin'
+binary-path:     '/Users/Zhuanz1/Documents/.Agent07-worktrees/no-sleep-owl/NoSleepOwl/.build/arm64-apple-macosx/debug/NoSleepOwlApp'
+relocations:     []
+...
