@@ -5,6 +5,8 @@ import NoSleepOwlCore
 final class ControlWindowController: NSObject, NSWindowDelegate {
     private let store: OwlModeStore
     private let launchController: LaunchAtLoginController
+    private let sleepController: PrivilegedSleepController
+    private let safetyMonitor: SafetyMonitor
     private let window: NSWindow
     private let emoji = NSTextField(labelWithString: "")
     private let titleLabel = NSTextField(labelWithString: "")
@@ -13,12 +15,17 @@ final class ControlWindowController: NSObject, NSWindowDelegate {
     private let errorLabel = NSTextField(labelWithString: "")
     private let toggleButton = NSButton(title: "", target: nil, action: nil)
     private let loginButton = NSButton(checkboxWithTitle: "登录时自动启动", target: nil, action: nil)
+    private let batteryButton = NSButton(checkboxWithTitle: "使用电池时也允许合盖守夜", target: nil, action: nil)
+    private let helperLabel = NSTextField(labelWithString: "")
+    private let helperButton = NSButton(title: "安装 / 批准辅助程序", target: nil, action: nil)
     private var timer: Timer?
 
-    init(store: OwlModeStore, launchController: LaunchAtLoginController) {
+    init(store: OwlModeStore, launchController: LaunchAtLoginController, sleepController: PrivilegedSleepController, safetyMonitor: SafetyMonitor) {
         self.store = store
         self.launchController = launchController
-        window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 460, height: 470), styleMask: [.titled, .closable, .miniaturizable], backing: .buffered, defer: false)
+        self.sleepController = sleepController
+        self.safetyMonitor = safetyMonitor
+        window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 480, height: 570), styleMask: [.titled, .closable, .miniaturizable], backing: .buffered, defer: false)
         super.init()
         window.title = "不休眠猫头鹰"
         window.isReleasedWhenClosed = false
@@ -42,6 +49,9 @@ final class ControlWindowController: NSObject, NSWindowDelegate {
         toggleButton.title = p.toggleTitle
         errorLabel.stringValue = store.errorMessage ?? ""
         loginButton.state = launchController.isEnabled ? .on : .off
+        batteryButton.state = safetyMonitor.powerPolicy == .allowBattery ? .on : .off
+        helperLabel.stringValue = sleepController.statusText
+        helperButton.isHidden = sleepController.isReady
         updateDuration()
     }
 
@@ -65,8 +75,14 @@ final class ControlWindowController: NSObject, NSWindowDelegate {
         toggleButton.action = #selector(toggleMode)
         loginButton.target = self
         loginButton.action = #selector(toggleLogin)
+        batteryButton.target = self
+        batteryButton.action = #selector(toggleBatteryPolicy)
+        helperLabel.textColor = .secondaryLabelColor
+        helperLabel.alignment = .center
+        helperButton.target = self
+        helperButton.action = #selector(registerHelper)
 
-        let stack = NSStackView(views: [emoji, titleLabel, detailLabel, durationLabel, toggleButton, loginButton, errorLabel])
+        let stack = NSStackView(views: [emoji, titleLabel, detailLabel, durationLabel, toggleButton, helperLabel, helperButton, batteryButton, loginButton, errorLabel])
         stack.orientation = .vertical
         stack.alignment = .centerX
         stack.spacing = 18
@@ -103,5 +119,16 @@ final class ControlWindowController: NSObject, NSWindowDelegate {
         do { try launchController.setEnabled(loginButton.state == .on) }
         catch { errorLabel.stringValue = "未能修改登录启动设置。" }
         loginButton.state = launchController.isEnabled ? .on : .off
+    }
+
+    @objc private func toggleBatteryPolicy() {
+        safetyMonitor.powerPolicy = batteryButton.state == .on ? .allowBattery : .acOnly
+        safetyMonitor.evaluate()
+    }
+
+    @objc private func registerHelper() {
+        do { try sleepController.register(); store.setMessage("辅助程序已准备好。") }
+        catch { store.setMessage(error.localizedDescription) }
+        refresh()
     }
 }

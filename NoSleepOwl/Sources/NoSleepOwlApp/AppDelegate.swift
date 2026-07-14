@@ -3,13 +3,15 @@ import NoSleepOwlCore
 
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
-    private let store = OwlModeStore(controller: ClosedLidSleepAssertionController())
+    private let sleepController = PrivilegedSleepController()
+    private lazy var store = OwlModeStore(controller: sleepController)
+    private lazy var safetyMonitor = SafetyMonitor(store: store)
     private var statusController: StatusItemController!
     private var windowController: ControlWindowController!
     private let launchController = LaunchAtLoginController()
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        windowController = ControlWindowController(store: store, launchController: launchController)
+        windowController = ControlWindowController(store: store, launchController: launchController, sleepController: sleepController, safetyMonitor: safetyMonitor)
         statusController = StatusItemController(
             store: store,
             launchController: launchController,
@@ -23,6 +25,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if ProcessInfo.processInfo.arguments.contains("--open-window") {
             windowController.show()
         }
+        safetyMonitor.start()
     }
 
     func applicationWillTerminate(_ notification: Notification) {
