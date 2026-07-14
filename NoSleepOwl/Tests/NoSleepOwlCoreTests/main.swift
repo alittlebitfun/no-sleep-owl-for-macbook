@@ -71,6 +71,23 @@ test("shutdown releases active assertion") {
     try expect(store.mode == .bird, "expected bird mode")
 }
 
+test("IOKit assertion prevents only idle system sleep") {
+    try expect(IOKitSleepAssertionController.assertionType == "PreventUserIdleSystemSleep", "wrong assertion type")
+}
+
+test("bird and owl presentations are distinct") {
+    try expect(BirdPresentation(mode: .bird).statusTitle == "小鸟可以休息", "wrong bird title")
+    try expect(BirdPresentation(mode: .owl).statusTitle == "猫头鹰正在守夜", "wrong owl title")
+    try expect(BirdPresentation(mode: .bird).toggleTitle == "切换到猫头鹰模式", "wrong bird action")
+    try expect(BirdPresentation(mode: .owl).toggleTitle == "切换到小鸟模式", "wrong owl action")
+}
+
+test("duration formatter covers seconds minutes and hours") {
+    try expect(OwlDurationFormatter.string(seconds: 0) == "00:00", "wrong zero duration")
+    try expect(OwlDurationFormatter.string(seconds: 65) == "01:05", "wrong minute duration")
+    try expect(OwlDurationFormatter.string(seconds: 3661) == "01:01:01", "wrong hour duration")
+}
+
 if failures > 0 {
     print("\(failures) TEST(S) FAILED")
     exit(1)
