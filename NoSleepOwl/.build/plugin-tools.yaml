@@ -1,0 +1,159 @@
+client:
+  name: basic
+  file-system: device-agnostic
+tools: {}
+targets:
+  "NoSleepOwlApp-arm64-apple-macosx15.0-debug.exe": ["<NoSleepOwlApp-arm64-apple-macosx15.0-debug.exe>"]
+  "NoSleepOwlApp-arm64-apple-macosx15.0-debug.module": ["<NoSleepOwlApp-arm64-apple-macosx15.0-debug.module>"]
+  "NoSleepOwlCore-arm64-apple-macosx15.0-debug.module": ["<NoSleepOwlCore-arm64-apple-macosx15.0-debug.module>"]
+  "NoSleepOwlTests-arm64-apple-macosx15.0-debug.exe": ["<NoSleepOwlTests-arm64-apple-macosx15.0-debug.exe>"]
+  "NoSleepOwlTests-arm64-apple-macosx15.0-debug.module": ["<NoSleepOwlTests-arm64-apple-macosx15.0-debug.module>"]
+  "PackageStructure": ["<PackageStructure>"]
+  "main": ["<NoSleepOwlApp-arm64-apple-macosx15.0-debug.exe>","<NoSleepOwlApp-arm64-apple-macosx15.0-debug.module>","<NoSleepOwlCore-arm64-apple-macosx15.0-debug.module>","<NoSleepOwlTests-arm64-apple-macosx15.0-debug.exe>","<NoSleepOwlTests-arm64-apple-macosx15.0-debug.module>"]
+  "test": ["<NoSleepOwlApp-arm64-apple-macosx15.0-debug.exe>","<NoSleepOwlApp-arm64-apple-macosx15.0-debug.module>","<NoSleepOwlCore-arm64-apple-macosx15.0-debug.module>","<NoSleepOwlTests-arm64-apple-macosx15.0-debug.exe>","<NoSleepOwlTests-arm64-apple-macosx15.0-debug.module>"]
+default: "main"
+nodes:
+  "/Users/Zhuanz1/Documents/.Agent07-worktrees/no-sleep-owl/NoSleepOwl/Sources/NoSleepOwlApp/":
+    is-directory-structure: true
+    content-exclusion-patterns: [".git",".build"]
+  "/Users/Zhuanz1/Documents/.Agent07-worktrees/no-sleep-owl/NoSleepOwl/Sources/NoSleepOwlCore/":
+    is-directory-structure: true
+    content-exclusion-patterns: [".git",".build"]
+  "/Users/Zhuanz1/Documents/.Agent07-worktrees/no-sleep-owl/NoSleepOwl/Tests/NoSleepOwlCoreTests/":
+    is-directory-structure: true
+    content-exclusion-patterns: [".git",".build"]
+  "/Users/Zhuanz1/Documents/.Agent07-worktrees/no-sleep-owl/NoSleepOwl/.build/arm64-apple-macosx/debug/NoSleepOwlApp":
+    is-mutated: true
+  "/Users/Zhuanz1/Documents/.Agent07-worktrees/no-sleep-owl/NoSleepOwl/.build/arm64-apple-macosx/debug/NoSleepOwlTests":
+    is-mutated: true
+commands:
+  "/Users/Zhuanz1/Documents/.Agent07-worktrees/no-sleep-owl/NoSleepOwl/.build/arm64-apple-macosx/debug/NoSleepOwlApp-entitlement.plist":
+    tool: write-auxiliary-file
+    inputs: ["<entitlement-plist>","<com.apple.security.get-task-allow>"]
+    outputs: ["/Users/Zhuanz1/Documents/.Agent07-worktrees/no-sleep-owl/NoSleepOwl/.build/arm64-apple-macosx/debug/NoSleepOwlApp-entitlement.plist"]
+    description: "Write auxiliary file /Users/Zhuanz1/Documents/.Agent07-worktrees/no-sleep-owl/NoSleepOwl/.build/arm64-apple-macosx/debug/NoSleepOwlApp-entitlement.plist"
+
+  "/Users/Zhuanz1/Documents/.Agent07-worktrees/no-sleep-owl/NoSleepOwl/.build/arm64-apple-macosx/debug/NoSleepOwlApp.build/sources":
+    tool: write-auxiliary-file
+    inputs: ["<sources-file-list>","/Users/Zhuanz1/Documents/.Agent07-worktrees/no-sleep-owl/NoSleepOwl/Sources/NoSleepOwlApp/main.swift"]
+    outputs: ["/Users/Zhuanz1/Documents/.Agent07-worktrees/no-sleep-owl/NoSleepOwl/.build/arm64-apple-macosx/debug/NoSleepOwlApp.build/sources"]
+    description: "Write auxiliary file /Users/Zhuanz1/Documents/.Agent07-worktrees/no-sleep-owl/NoSleepOwl/.build/arm64-apple-macosx/debug/NoSleepOwlApp.build/sources"
+
+  "/Users/Zhuanz1/Documents/.Agent07-worktrees/no-sleep-owl/NoSleepOwl/.build/arm64-apple-macosx/debug/NoSleepOwlApp.product/Objects.LinkFileList":
+    tool: write-auxiliary-file
+    inputs: ["<link-file-list>","/Users/Zhuanz1/Documents/.Agent07-worktrees/no-sleep-owl/NoSleepOwl/.build/arm64-apple-macosx/debug/NoSleepOwlApp.build/main.swift.o","/Users/Zhuanz1/Documents/.Agent07-worktrees/no-sleep-owl/NoSleepOwl/.build/arm64-apple-macosx/debug/NoSleepOwlCore.build/OwlModeStore.swift.o","/Users/Zhuanz1/Documents/.Agent07-worktrees/no-sleep-owl/NoSleepOwl/.build/arm64-apple-macosx/debug/NoSleepOwlCore.build/SleepAssertionControlling.swift.o"]
+    outputs: ["/Users/Zhuanz1/Documents/.Agent07-worktrees/no-sleep-owl/NoSleepOwl/.build/arm64-apple-macosx/debug/NoSleepOwlApp.product/Objects.LinkFileList"]
+    description: "Write auxiliary file /Users/Zhuanz1/Documents/.Agent07-worktrees/no-sleep-owl/NoSleepOwl/.build/arm64-apple-macosx/debug/NoSleepOwlApp.product/Objects.LinkFileList"
+
+  "/Users/Zhuanz1/Documents/.Agent07-worktrees/no-sleep-owl/NoSleepOwl/.build/arm64-apple-macosx/debug/NoSleepOwlCore.build/sources":
+    tool: write-auxiliary-file
+    inputs: ["<sources-file-list>","/Users/Zhuanz1/Documents/.Agent07-worktrees/no-sleep-owl/NoSleepOwl/Sources/NoSleepOwlCore/OwlModeStore.swift","/Users/Zhuanz1/Documents/.Agent07-worktrees/no-sleep-owl/NoSleepOwl/Sources/NoSleepOwlCore/SleepAssertionControlling.swift"]
+    outputs: ["/Users/Zhuanz1/Documents/.Agent07-worktrees/no-sleep-owl/NoSleepOwl/.build/arm64-apple-macosx/debug/NoSleepOwlCore.build/sources"]
+    description: "Write auxiliary file /Users/Zhuanz1/Documents/.Agent07-worktrees/no-sleep-owl/NoSleepOwl/.build/arm64-apple-macosx/debug/NoSleepOwlCore.build/sources"
+
+  "/Users/Zhuanz1/Documents/.Agent07-worktrees/no-sleep-owl/NoSleepOwl/.build/arm64-apple-macosx/debug/NoSleepOwlTests-entitlement.plist":
+    tool: write-auxiliary-file
+    inputs: ["<entitlement-plist>","<com.apple.security.get-task-allow>"]
+    outputs: ["/Users/Zhuanz1/Documents/.Agent07-worktrees/no-sleep-owl/NoSleepOwl/.build/arm64-apple-macosx/debug/NoSleepOwlTests-entitlement.plist"]
+    description: "Write auxiliary file /Users/Zhuanz1/Documents/.Agent07-worktrees/no-sleep-owl/NoSleepOwl/.build/arm64-apple-macosx/debug/NoSleepOwlTests-entitlement.plist"
+
+  "/Users/Zhuanz1/Documents/.Agent07-worktrees/no-sleep-owl/NoSleepOwl/.build/arm64-apple-macosx/debug/NoSleepOwlTests.build/sources":
+    tool: write-auxiliary-file
+    inputs: ["<sources-file-list>","/Users/Zhuanz1/Documents/.Agent07-worktrees/no-sleep-owl/NoSleepOwl/Tests/NoSleepOwlCoreTests/main.swift"]
+    outputs: ["/Users/Zhuanz1/Documents/.Agent07-worktrees/no-sleep-owl/NoSleepOwl/.build/arm64-apple-macosx/debug/NoSleepOwlTests.build/sources"]
+    description: "Write auxiliary file /Users/Zhuanz1/Documents/.Agent07-worktrees/no-sleep-owl/NoSleepOwl/.build/arm64-apple-macosx/debug/NoSleepOwlTests.build/sources"
+
+  "/Users/Zhuanz1/Documents/.Agent07-worktrees/no-sleep-owl/NoSleepOwl/.build/arm64-apple-macosx/debug/NoSleepOwlTests.product/Objects.LinkFileList":
+    tool: write-auxiliary-file
+    inputs: ["<link-file-list>","/Users/Zhuanz1/Documents/.Agent07-worktrees/no-sleep-owl/NoSleepOwl/.build/arm64-apple-macosx/debug/NoSleepOwlCore.build/OwlModeStore.swift.o","/Users/Zhuanz1/Documents/.Agent07-worktrees/no-sleep-owl/NoSleepOwl/.build/arm64-apple-macosx/debug/NoSleepOwlCore.build/SleepAssertionControlling.swift.o","/Users/Zhuanz1/Documents/.Agent07-worktrees/no-sleep-owl/NoSleepOwl/.build/arm64-apple-macosx/debug/NoSleepOwlTests.build/main.swift.o"]
+    outputs: ["/Users/Zhuanz1/Documents/.Agent07-worktrees/no-sleep-owl/NoSleepOwl/.build/arm64-apple-macosx/debug/NoSleepOwlTests.product/Objects.LinkFileList"]
+    description: "Write auxiliary file /Users/Zhuanz1/Documents/.Agent07-worktrees/no-sleep-owl/NoSleepOwl/.build/arm64-apple-macosx/debug/NoSleepOwlTests.product/Objects.LinkFileList"
+
+  "/Users/Zhuanz1/Documents/.Agent07-worktrees/no-sleep-owl/NoSleepOwl/.build/arm64-apple-macosx/debug/swift-version--1AB21518FC5DEDBE.txt":
+    tool: write-auxiliary-file
+    inputs: ["<swift-get-version>","/Library/Developer/CommandLineTools/usr/bin/swiftc"]
+    outputs: ["/Users/Zhuanz1/Documents/.Agent07-worktrees/no-sleep-owl/NoSleepOwl/.build/arm64-apple-macosx/debug/swift-version--1AB21518FC5DEDBE.txt"]
+    always-out-of-date: "true"
+    description: "Write auxiliary file /Users/Zhuanz1/Documents/.Agent07-worktrees/no-sleep-owl/NoSleepOwl/.build/arm64-apple-macosx/debug/swift-version--1AB21518FC5DEDBE.txt"
+
+  "<NoSleepOwlApp-arm64-apple-macosx15.0-debug.exe>":
+    tool: phony
+    inputs: ["<NoSleepOwlApp-arm64-apple-macosx15.0-debug.exe-CodeSigning>"]
+    outputs: ["<NoSleepOwlApp-arm64-apple-macosx15.0-debug.exe>"]
+
+  "<NoSleepOwlApp-arm64-apple-macosx15.0-debug.module>":
+    tool: phony
+    inputs: ["/Users/Zhuanz1/Documents/.Agent07-worktrees/no-sleep-owl/NoSleepOwl/.build/arm64-apple-macosx/debug/NoSleepOwlApp.build/main.swift.o","/Users/Zhuanz1/Documents/.Agent07-worktrees/no-sleep-owl/NoSleepOwl/.build/arm64-apple-macosx/debug/Modules/NoSleepOwlApp.swiftmodule"]
+    outputs: ["<NoSleepOwlApp-arm64-apple-macosx15.0-debug.module>"]
+
+  "<NoSleepOwlCore-arm64-apple-macosx15.0-debug.module>":
+    tool: phony
+    inputs: ["/Users/Zhuanz1/Documents/.Agent07-worktrees/no-sleep-owl/NoSleepOwl/.build/arm64-apple-macosx/debug/NoSleepOwlCore.build/OwlModeStore.swift.o","/Users/Zhuanz1/Documents/.Agent07-worktrees/no-sleep-owl/NoSleepOwl/.build/arm64-apple-macosx/debug/NoSleepOwlCore.build/SleepAssertionControlling.swift.o","/Users/Zhuanz1/Documents/.Agent07-worktrees/no-sleep-owl/NoSleepOwl/.build/arm64-apple-macosx/debug/Modules/NoSleepOwlCore.swiftmodule"]
+    outputs: ["<NoSleepOwlCore-arm64-apple-macosx15.0-debug.module>"]
+
+  "<NoSleepOwlTests-arm64-apple-macosx15.0-debug.exe>":
+    tool: phony
+    inputs: ["<NoSleepOwlTests-arm64-apple-macosx15.0-debug.exe-CodeSigning>"]
+    outputs: ["<NoSleepOwlTests-arm64-apple-macosx15.0-debug.exe>"]
+
+  "<NoSleepOwlTests-arm64-apple-macosx15.0-debug.module>":
+    tool: phony
+    inputs: ["/Users/Zhuanz1/Documents/.Agent07-worktrees/no-sleep-owl/NoSleepOwl/.build/arm64-apple-macosx/debug/NoSleepOwlTests.build/main.swift.o","/Users/Zhuanz1/Documents/.Agent07-worktrees/no-sleep-owl/NoSleepOwl/.build/arm64-apple-macosx/debug/Modules/NoSleepOwlTests.swiftmodule"]
+    outputs: ["<NoSleepOwlTests-arm64-apple-macosx15.0-debug.module>"]
+
+  "C.NoSleepOwlApp-arm64-apple-macosx15.0-debug.exe":
+    tool: shell
+    inputs: ["/Users/Zhuanz1/Documents/.Agent07-worktrees/no-sleep-owl/NoSleepOwl/.build/arm64-apple-macosx/debug/NoSleepOwlApp.build/main.swift.o","/Users/Zhuanz1/Documents/.Agent07-worktrees/no-sleep-owl/NoSleepOwl/.build/arm64-apple-macosx/debug/NoSleepOwlCore.build/OwlModeStore.swift.o","/Users/Zhuanz1/Documents/.Agent07-worktrees/no-sleep-owl/NoSleepOwl/.build/arm64-apple-macosx/debug/NoSleepOwlCore.build/SleepAssertionControlling.swift.o","/Users/Zhuanz1/Documents/.Agent07-worktrees/no-sleep-owl/NoSleepOwl/.build/arm64-apple-macosx/debug/NoSleepOwlApp.product/Objects.LinkFileList"]
+    outputs: ["/Users/Zhuanz1/Documents/.Agent07-worktrees/no-sleep-owl/NoSleepOwl/.build/arm64-apple-macosx/debug/NoSleepOwlApp"]
+    description: "Linking ./.build/arm64-apple-macosx/debug/NoSleepOwlApp"
+    args: ["/Library/Developer/CommandLineTools/usr/bin/swiftc","-L","/Users/Zhuanz1/Documents/.Agent07-worktrees/no-sleep-owl/NoSleepOwl/.build/arm64-apple-macosx/debug","-o","/Users/Zhuanz1/Documents/.Agent07-worktrees/no-sleep-owl/NoSleepOwl/.build/arm64-apple-macosx/debug/NoSleepOwlApp","-module-name","NoSleepOwlApp","-Xlinker","-no_warn_duplicate_libraries","-emit-executable","-Xlinker","-alias","-Xlinker","_NoSleepOwlApp_main","-Xlinker","_main","-Xlinker","-rpath","-Xlinker","@loader_path","@/Users/Zhuanz1/Documents/.Agent07-worktrees/no-sleep-owl/NoSleepOwl/.build/arm64-apple-macosx/debug/NoSleepOwlApp.product/Objects.LinkFileList","-Xlinker","-rpath","-Xlinker","/Library/Developer/CommandLineTools/usr/lib/swift-6.2/macosx","-target","arm64-apple-macosx15.0","-Xlinker","-add_ast_path","-Xlinker","/Users/Zhuanz1/Documents/.Agent07-worktrees/no-sleep-owl/NoSleepOwl/.build/arm64-apple-macosx/debug/Modules/NoSleepOwlApp.swiftmodule","-Xlinker","-add_ast_path","-Xlinker","/Users/Zhuanz1/Documents/.Agent07-worktrees/no-sleep-owl/NoSleepOwl/.build/arm64-apple-macosx/debug/Modules/NoSleepOwlCore.swiftmodule","-I","/Library/Developer/CommandLineTools/Library/Developer/Frameworks","-L","/Library/Developer/CommandLineTools/Library/Developer/Frameworks","-plugin-path","/Library/Developer/CommandLineTools/usr/lib/swift/host/plugins/testing","-sdk","/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk","-g"]
+
+  "C.NoSleepOwlApp-arm64-apple-macosx15.0-debug.exe-entitlements":
+    tool: shell
+    inputs: ["/Users/Zhuanz1/Documents/.Agent07-worktrees/no-sleep-owl/NoSleepOwl/.build/arm64-apple-macosx/debug/NoSleepOwlApp","/Users/Zhuanz1/Documents/.Agent07-worktrees/no-sleep-owl/NoSleepOwl/.build/arm64-apple-macosx/debug/NoSleepOwlApp-entitlement.plist"]
+    outputs: ["<NoSleepOwlApp-arm64-apple-macosx15.0-debug.exe-CodeSigning>"]
+    description: "Applying debug entitlements to ./.build/arm64-apple-macosx/debug/NoSleepOwlApp"
+    args: ["codesign","--force","--sign","-","--entitlements","/Users/Zhuanz1/Documents/.Agent07-worktrees/no-sleep-owl/NoSleepOwl/.build/arm64-apple-macosx/debug/NoSleepOwlApp-entitlement.plist","/Users/Zhuanz1/Documents/.Agent07-worktrees/no-sleep-owl/NoSleepOwl/.build/arm64-apple-macosx/debug/NoSleepOwlApp"]
+
+  "C.NoSleepOwlApp-arm64-apple-macosx15.0-debug.module":
+    tool: shell
+    inputs: ["/Users/Zhuanz1/Documents/.Agent07-worktrees/no-sleep-owl/NoSleepOwl/Sources/NoSleepOwlApp/main.swift","/Users/Zhuanz1/Documents/.Agent07-worktrees/no-sleep-owl/NoSleepOwl/.build/arm64-apple-macosx/debug/swift-version--1AB21518FC5DEDBE.txt","/Users/Zhuanz1/Documents/.Agent07-worktrees/no-sleep-owl/NoSleepOwl/.build/arm64-apple-macosx/debug/Modules/NoSleepOwlCore.swiftmodule","/Users/Zhuanz1/Documents/.Agent07-worktrees/no-sleep-owl/NoSleepOwl/.build/arm64-apple-macosx/debug/NoSleepOwlApp.build/sources"]
+    outputs: ["/Users/Zhuanz1/Documents/.Agent07-worktrees/no-sleep-owl/NoSleepOwl/.build/arm64-apple-macosx/debug/NoSleepOwlApp.build/main.swift.o","/Users/Zhuanz1/Documents/.Agent07-worktrees/no-sleep-owl/NoSleepOwl/.build/arm64-apple-macosx/debug/Modules/NoSleepOwlApp.swiftmodule"]
+    description: "Compiling Swift Module 'NoSleepOwlApp' (1 sources)"
+    args: ["/Library/Developer/CommandLineTools/usr/bin/swiftc","-module-name","NoSleepOwlApp","-emit-dependencies","-emit-module","-emit-module-path","/Users/Zhuanz1/Documents/.Agent07-worktrees/no-sleep-owl/NoSleepOwl/.build/arm64-apple-macosx/debug/Modules/NoSleepOwlApp.swiftmodule","-output-file-map","/Users/Zhuanz1/Documents/.Agent07-worktrees/no-sleep-owl/NoSleepOwl/.build/arm64-apple-macosx/debug/NoSleepOwlApp.build/output-file-map.json","-incremental","-c","@/Users/Zhuanz1/Documents/.Agent07-worktrees/no-sleep-owl/NoSleepOwl/.build/arm64-apple-macosx/debug/NoSleepOwlApp.build/sources","-I","/Users/Zhuanz1/Documents/.Agent07-worktrees/no-sleep-owl/NoSleepOwl/.build/arm64-apple-macosx/debug/Modules","-target","arm64-apple-macosx15.0","-incremental","-enable-batch-mode","-serialize-diagnostics","-index-store-path","/Users/Zhuanz1/Documents/.Agent07-worktrees/no-sleep-owl/NoSleepOwl/.build/arm64-apple-macosx/debug/index/store","-Onone","-enable-testing","-j10","-DSWIFT_PACKAGE","-DDEBUG","-DSWIFT_MODULE_RESOURCE_BUNDLE_UNAVAILABLE","-module-cache-path","/Users/Zhuanz1/Documents/.Agent07-worktrees/no-sleep-owl/NoSleepOwl/.build/arm64-apple-macosx/debug/ModuleCache","-parseable-output","-Xfrontend","-entry-point-function-name","-Xfrontend","NoSleepOwlApp_main","-swift-version","6","-I","/Library/Developer/CommandLineTools/Library/Developer/Frameworks","-L","/Library/Developer/CommandLineTools/Library/Developer/Frameworks","-plugin-path","/Library/Developer/CommandLineTools/usr/lib/swift/host/plugins/testing","-sdk","/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk","-g","-Xcc","-isysroot","-Xcc","/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk","-Xcc","-fPIC","-Xcc","-g","-package-name","nosleepowl"]
+
+  "C.NoSleepOwlCore-arm64-apple-macosx15.0-debug.module":
+    tool: shell
+    inputs: ["/Users/Zhuanz1/Documents/.Agent07-worktrees/no-sleep-owl/NoSleepOwl/Sources/NoSleepOwlCore/OwlModeStore.swift","/Users/Zhuanz1/Documents/.Agent07-worktrees/no-sleep-owl/NoSleepOwl/Sources/NoSleepOwlCore/SleepAssertionControlling.swift","/Users/Zhuanz1/Documents/.Agent07-worktrees/no-sleep-owl/NoSleepOwl/.build/arm64-apple-macosx/debug/swift-version--1AB21518FC5DEDBE.txt","/Users/Zhuanz1/Documents/.Agent07-worktrees/no-sleep-owl/NoSleepOwl/.build/arm64-apple-macosx/debug/NoSleepOwlCore.build/sources"]
+    outputs: ["/Users/Zhuanz1/Documents/.Agent07-worktrees/no-sleep-owl/NoSleepOwl/.build/arm64-apple-macosx/debug/NoSleepOwlCore.build/OwlModeStore.swift.o","/Users/Zhuanz1/Documents/.Agent07-worktrees/no-sleep-owl/NoSleepOwl/.build/arm64-apple-macosx/debug/NoSleepOwlCore.build/SleepAssertionControlling.swift.o","/Users/Zhuanz1/Documents/.Agent07-worktrees/no-sleep-owl/NoSleepOwl/.build/arm64-apple-macosx/debug/Modules/NoSleepOwlCore.swiftmodule"]
+    description: "Compiling Swift Module 'NoSleepOwlCore' (2 sources)"
+    args: ["/Library/Developer/CommandLineTools/usr/bin/swiftc","-module-name","NoSleepOwlCore","-emit-dependencies","-emit-module","-emit-module-path","/Users/Zhuanz1/Documents/.Agent07-worktrees/no-sleep-owl/NoSleepOwl/.build/arm64-apple-macosx/debug/Modules/NoSleepOwlCore.swiftmodule","-output-file-map","/Users/Zhuanz1/Documents/.Agent07-worktrees/no-sleep-owl/NoSleepOwl/.build/arm64-apple-macosx/debug/NoSleepOwlCore.build/output-file-map.json","-parse-as-library","-incremental","-c","@/Users/Zhuanz1/Documents/.Agent07-worktrees/no-sleep-owl/NoSleepOwl/.build/arm64-apple-macosx/debug/NoSleepOwlCore.build/sources","-I","/Users/Zhuanz1/Documents/.Agent07-worktrees/no-sleep-owl/NoSleepOwl/.build/arm64-apple-macosx/debug/Modules","-target","arm64-apple-macosx15.0","-incremental","-enable-batch-mode","-serialize-diagnostics","-index-store-path","/Users/Zhuanz1/Documents/.Agent07-worktrees/no-sleep-owl/NoSleepOwl/.build/arm64-apple-macosx/debug/index/store","-Onone","-enable-testing","-j10","-DSWIFT_PACKAGE","-DDEBUG","-DSWIFT_MODULE_RESOURCE_BUNDLE_UNAVAILABLE","-module-cache-path","/Users/Zhuanz1/Documents/.Agent07-worktrees/no-sleep-owl/NoSleepOwl/.build/arm64-apple-macosx/debug/ModuleCache","-parseable-output","-parse-as-library","-emit-objc-header","-emit-objc-header-path","/Users/Zhuanz1/Documents/.Agent07-worktrees/no-sleep-owl/NoSleepOwl/.build/arm64-apple-macosx/debug/NoSleepOwlCore.build/include/NoSleepOwlCore-Swift.h","-swift-version","6","-I","/Library/Developer/CommandLineTools/Library/Developer/Frameworks","-L","/Library/Developer/CommandLineTools/Library/Developer/Frameworks","-plugin-path","/Library/Developer/CommandLineTools/usr/lib/swift/host/plugins/testing","-sdk","/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk","-g","-Xcc","-isysroot","-Xcc","/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk","-Xcc","-fPIC","-Xcc","-g","-package-name","nosleepowl"]
+
+  "C.NoSleepOwlTests-arm64-apple-macosx15.0-debug.exe":
+    tool: shell
+    inputs: ["/Users/Zhuanz1/Documents/.Agent07-worktrees/no-sleep-owl/NoSleepOwl/.build/arm64-apple-macosx/debug/NoSleepOwlCore.build/OwlModeStore.swift.o","/Users/Zhuanz1/Documents/.Agent07-worktrees/no-sleep-owl/NoSleepOwl/.build/arm64-apple-macosx/debug/NoSleepOwlCore.build/SleepAssertionControlling.swift.o","/Users/Zhuanz1/Documents/.Agent07-worktrees/no-sleep-owl/NoSleepOwl/.build/arm64-apple-macosx/debug/NoSleepOwlTests.build/main.swift.o","/Users/Zhuanz1/Documents/.Agent07-worktrees/no-sleep-owl/NoSleepOwl/.build/arm64-apple-macosx/debug/NoSleepOwlTests.product/Objects.LinkFileList"]
+    outputs: ["/Users/Zhuanz1/Documents/.Agent07-worktrees/no-sleep-owl/NoSleepOwl/.build/arm64-apple-macosx/debug/NoSleepOwlTests"]
+    description: "Linking ./.build/arm64-apple-macosx/debug/NoSleepOwlTests"
+    args: ["/Library/Developer/CommandLineTools/usr/bin/swiftc","-L","/Users/Zhuanz1/Documents/.Agent07-worktrees/no-sleep-owl/NoSleepOwl/.build/arm64-apple-macosx/debug","-o","/Users/Zhuanz1/Documents/.Agent07-worktrees/no-sleep-owl/NoSleepOwl/.build/arm64-apple-macosx/debug/NoSleepOwlTests","-module-name","NoSleepOwlTests","-Xlinker","-no_warn_duplicate_libraries","-emit-executable","-Xlinker","-alias","-Xlinker","_NoSleepOwlTests_main","-Xlinker","_main","-Xlinker","-rpath","-Xlinker","@loader_path","@/Users/Zhuanz1/Documents/.Agent07-worktrees/no-sleep-owl/NoSleepOwl/.build/arm64-apple-macosx/debug/NoSleepOwlTests.product/Objects.LinkFileList","-Xlinker","-rpath","-Xlinker","/Library/Developer/CommandLineTools/usr/lib/swift-6.2/macosx","-target","arm64-apple-macosx15.0","-Xlinker","-add_ast_path","-Xlinker","/Users/Zhuanz1/Documents/.Agent07-worktrees/no-sleep-owl/NoSleepOwl/.build/arm64-apple-macosx/debug/Modules/NoSleepOwlCore.swiftmodule","-Xlinker","-add_ast_path","-Xlinker","/Users/Zhuanz1/Documents/.Agent07-worktrees/no-sleep-owl/NoSleepOwl/.build/arm64-apple-macosx/debug/Modules/NoSleepOwlTests.swiftmodule","-I","/Library/Developer/CommandLineTools/Library/Developer/Frameworks","-L","/Library/Developer/CommandLineTools/Library/Developer/Frameworks","-plugin-path","/Library/Developer/CommandLineTools/usr/lib/swift/host/plugins/testing","-sdk","/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk","-g"]
+
+  "C.NoSleepOwlTests-arm64-apple-macosx15.0-debug.exe-entitlements":
+    tool: shell
+    inputs: ["/Users/Zhuanz1/Documents/.Agent07-worktrees/no-sleep-owl/NoSleepOwl/.build/arm64-apple-macosx/debug/NoSleepOwlTests","/Users/Zhuanz1/Documents/.Agent07-worktrees/no-sleep-owl/NoSleepOwl/.build/arm64-apple-macosx/debug/NoSleepOwlTests-entitlement.plist"]
+    outputs: ["<NoSleepOwlTests-arm64-apple-macosx15.0-debug.exe-CodeSigning>"]
+    description: "Applying debug entitlements to ./.build/arm64-apple-macosx/debug/NoSleepOwlTests"
+    args: ["codesign","--force","--sign","-","--entitlements","/Users/Zhuanz1/Documents/.Agent07-worktrees/no-sleep-owl/NoSleepOwl/.build/arm64-apple-macosx/debug/NoSleepOwlTests-entitlement.plist","/Users/Zhuanz1/Documents/.Agent07-worktrees/no-sleep-owl/NoSleepOwl/.build/arm64-apple-macosx/debug/NoSleepOwlTests"]
+
+  "C.NoSleepOwlTests-arm64-apple-macosx15.0-debug.module":
+    tool: shell
+    inputs: ["/Users/Zhuanz1/Documents/.Agent07-worktrees/no-sleep-owl/NoSleepOwl/Tests/NoSleepOwlCoreTests/main.swift","/Users/Zhuanz1/Documents/.Agent07-worktrees/no-sleep-owl/NoSleepOwl/.build/arm64-apple-macosx/debug/swift-version--1AB21518FC5DEDBE.txt","/Users/Zhuanz1/Documents/.Agent07-worktrees/no-sleep-owl/NoSleepOwl/.build/arm64-apple-macosx/debug/Modules/NoSleepOwlCore.swiftmodule","/Users/Zhuanz1/Documents/.Agent07-worktrees/no-sleep-owl/NoSleepOwl/.build/arm64-apple-macosx/debug/NoSleepOwlTests.build/sources"]
+    outputs: ["/Users/Zhuanz1/Documents/.Agent07-worktrees/no-sleep-owl/NoSleepOwl/.build/arm64-apple-macosx/debug/NoSleepOwlTests.build/main.swift.o","/Users/Zhuanz1/Documents/.Agent07-worktrees/no-sleep-owl/NoSleepOwl/.build/arm64-apple-macosx/debug/Modules/NoSleepOwlTests.swiftmodule"]
+    description: "Compiling Swift Module 'NoSleepOwlTests' (1 sources)"
+    args: ["/Library/Developer/CommandLineTools/usr/bin/swiftc","-module-name","NoSleepOwlTests","-emit-dependencies","-emit-module","-emit-module-path","/Users/Zhuanz1/Documents/.Agent07-worktrees/no-sleep-owl/NoSleepOwl/.build/arm64-apple-macosx/debug/Modules/NoSleepOwlTests.swiftmodule","-output-file-map","/Users/Zhuanz1/Documents/.Agent07-worktrees/no-sleep-owl/NoSleepOwl/.build/arm64-apple-macosx/debug/NoSleepOwlTests.build/output-file-map.json","-incremental","-c","@/Users/Zhuanz1/Documents/.Agent07-worktrees/no-sleep-owl/NoSleepOwl/.build/arm64-apple-macosx/debug/NoSleepOwlTests.build/sources","-I","/Users/Zhuanz1/Documents/.Agent07-worktrees/no-sleep-owl/NoSleepOwl/.build/arm64-apple-macosx/debug/Modules","-target","arm64-apple-macosx15.0","-incremental","-enable-batch-mode","-serialize-diagnostics","-index-store-path","/Users/Zhuanz1/Documents/.Agent07-worktrees/no-sleep-owl/NoSleepOwl/.build/arm64-apple-macosx/debug/index/store","-Onone","-enable-testing","-j10","-DSWIFT_PACKAGE","-DDEBUG","-DSWIFT_MODULE_RESOURCE_BUNDLE_UNAVAILABLE","-module-cache-path","/Users/Zhuanz1/Documents/.Agent07-worktrees/no-sleep-owl/NoSleepOwl/.build/arm64-apple-macosx/debug/ModuleCache","-parseable-output","-Xfrontend","-entry-point-function-name","-Xfrontend","NoSleepOwlTests_main","-swift-version","6","-I","/Library/Developer/CommandLineTools/Library/Developer/Frameworks","-L","/Library/Developer/CommandLineTools/Library/Developer/Frameworks","-plugin-path","/Library/Developer/CommandLineTools/usr/lib/swift/host/plugins/testing","-sdk","/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk","-g","-Xcc","-isysroot","-Xcc","/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk","-Xcc","-fPIC","-Xcc","-g","-package-name","nosleepowl"]
+
+  "PackageStructure":
+    tool: package-structure-tool
+    inputs: ["/Users/Zhuanz1/Documents/.Agent07-worktrees/no-sleep-owl/NoSleepOwl/Sources/NoSleepOwlApp/","/Users/Zhuanz1/Documents/.Agent07-worktrees/no-sleep-owl/NoSleepOwl/Sources/NoSleepOwlCore/","/Users/Zhuanz1/Documents/.Agent07-worktrees/no-sleep-owl/NoSleepOwl/Tests/NoSleepOwlCoreTests/","/Users/Zhuanz1/Documents/.Agent07-worktrees/no-sleep-owl/NoSleepOwl/Package.swift","/Users/Zhuanz1/Documents/.Agent07-worktrees/no-sleep-owl/NoSleepOwl/Package.resolved"]
+    outputs: ["<PackageStructure>"]
+    description: "Planning build"
+    allow-missing-inputs: true
+

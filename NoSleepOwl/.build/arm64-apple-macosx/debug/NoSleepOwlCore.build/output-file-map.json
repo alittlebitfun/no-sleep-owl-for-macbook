@@ -1,0 +1,19 @@
+{
+  "": {
+    "swift-dependencies": "/Users/Zhuanz1/Documents/.Agent07-worktrees/no-sleep-owl/NoSleepOwl/.build/arm64-apple-macosx/debug/NoSleepOwlCore.build/master.swiftdeps"
+  },
+  "/Users/Zhuanz1/Documents/.Agent07-worktrees/no-sleep-owl/NoSleepOwl/Sources/NoSleepOwlCore/OwlModeStore.swift": {
+    "dependencies": "/Users/Zhuanz1/Documents/.Agent07-worktrees/no-sleep-owl/NoSleepOwl/.build/arm64-apple-macosx/debug/NoSleepOwlCore.build/OwlModeStore.d",
+    "object": "/Users/Zhuanz1/Documents/.Agent07-worktrees/no-sleep-owl/NoSleepOwl/.build/arm64-apple-macosx/debug/NoSleepOwlCore.build/OwlModeStore.swift.o",
+    "swiftmodule": "/Users/Zhuanz1/Documents/.Agent07-worktrees/no-sleep-owl/NoSleepOwl/.build/arm64-apple-macosx/debug/NoSleepOwlCore.build/OwlModeStore~partial.swiftmodule",
+    "swift-dependencies": "/Users/Zhuanz1/Documents/.Agent07-worktrees/no-sleep-owl/NoSleepOwl/.build/arm64-apple-macosx/debug/NoSleepOwlCore.build/OwlModeStore.swiftdeps",
+    "diagnostics": "/Users/Zhuanz1/Documents/.Agent07-worktrees/no-sleep-owl/NoSleepOwl/.build/arm64-apple-macosx/debug/NoSleepOwlCore.build/OwlModeStore.dia"
+  },
+  "/Users/Zhuanz1/Documents/.Agent07-worktrees/no-sleep-owl/NoSleepOwl/Sources/NoSleepOwlCore/SleepAssertionControlling.swift": {
+    "dependencies": "/Users/Zhuanz1/Documents/.Agent07-worktrees/no-sleep-owl/NoSleepOwl/.build/arm64-apple-macosx/debug/NoSleepOwlCore.build/SleepAssertionControlling.d",
+    "object": "/Users/Zhuanz1/Documents/.Agent07-worktrees/no-sleep-owl/NoSleepOwl/.build/arm64-apple-macosx/debug/NoSleepOwlCore.build/SleepAssertionControlling.swift.o",
+    "swiftmodule": "/Users/Zhuanz1/Documents/.Agent07-worktrees/no-sleep-owl/NoSleepOwl/.build/arm64-apple-macosx/debug/NoSleepOwlCore.build/SleepAssertionControlling~partial.swiftmodule",
+    "swift-dependencies": "/Users/Zhuanz1/Documents/.Agent07-worktrees/no-sleep-owl/NoSleepOwl/.build/arm64-apple-macosx/debug/NoSleepOwlCore.build/SleepAssertionControlling.swiftdeps",
+    "diagnostics": "/Users/Zhuanz1/Documents/.Agent07-worktrees/no-sleep-owl/NoSleepOwl/.build/arm64-apple-macosx/debug/NoSleepOwlCore.build/SleepAssertionControlling.dia"
+  }
+}
