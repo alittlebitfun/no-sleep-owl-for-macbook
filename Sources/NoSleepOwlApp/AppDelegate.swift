@@ -3,7 +3,7 @@ import NoSleepOwlCore
 
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
-    private let store = OwlModeStore(controller: IOKitSleepAssertionController())
+    private let store = OwlModeStore(controller: ClosedLidSleepAssertionController())
     private var statusController: StatusItemController!
     private var windowController: ControlWindowController!
     private let launchController = LaunchAtLoginController()
