@@ -33,7 +33,7 @@ public final class OwlModeStore {
                 startedAt = now()
                 mode = .owl
             } catch {
-                errorMessage = "未能开启守夜，请稍后重试。"
+                errorMessage = error.localizedDescription
             }
         case .owl:
             guard let assertionID else { return }
@@ -46,6 +46,11 @@ public final class OwlModeStore {
                 errorMessage = "未能恢复休息，请再试一次。"
             }
         }
+        onChange?()
+    }
+
+    public func setMessage(_ message: String?) {
+        errorMessage = message
         onChange?()
     }
 
