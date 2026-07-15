@@ -105,7 +105,7 @@ final class StatusItemController: NSObject {
         menu.addItem(status)
         if let snapshot = thermalMonitor.latestSnapshot {
             let thermal = ThermalPresentation(state: snapshot.thermalState)
-            let top = snapshot.applications.first.map { " · \($0.usage.name) \(Int($0.usage.cpuPercent.rounded()))%" } ?? ""
+            let top = snapshot.applications.first.map { " · \($0.usage.name) \(CPUUsageFormatter.string($0.usage.cpuPercent))" } ?? ""
             let item = NSMenuItem(title: "电脑状态：\(thermal.title)\(top)", action: nil, keyEquivalent: "")
             item.isEnabled = false
             menu.addItem(item)

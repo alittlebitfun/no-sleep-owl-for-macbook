@@ -177,6 +177,21 @@ test("application usage includes only regular user apps") {
     try expect(!ApplicationVisibilityPolicy.shouldInclude(isRegular: true, hasBundleIdentifier: true, isCurrentProcess: true), "own process must be excluded")
 }
 
+test("application CPU total includes helpers inside its app bundle") {
+    let records = [
+        ProcessCPURecord(path: "/Applications/ChatGPT.app/Contents/MacOS/ChatGPT", cpuTime: 2),
+        ProcessCPURecord(path: "/Applications/ChatGPT.app/Contents/Frameworks/Renderer", cpuTime: 3),
+        ProcessCPURecord(path: "/Applications/Figma.app/Contents/MacOS/Figma", cpuTime: 9)
+    ]
+    try expect(ApplicationCPUAggregator.totalCPUTime(bundlePath: "/Applications/ChatGPT.app", records: records) == 5, "helpers must be included")
+}
+
+test("CPU display keeps one decimal below ten percent") {
+    try expect(CPUUsageFormatter.string(0.24) == "0.2% CPU", "small usage must remain visible")
+    try expect(CPUUsageFormatter.string(8.86) == "8.9% CPU", "single digit usage needs one decimal")
+    try expect(CPUUsageFormatter.string(18.4) == "18% CPU", "large usage should be compact")
+}
+
 test("helper restores after fifteen seconds without heartbeat") {
     var helper = HelperStateMachine(timeout: 15)
     try expect(helper.enable(now: 100, originalValue: 0) == .setSleepDisabled(1), "enable must set one")
