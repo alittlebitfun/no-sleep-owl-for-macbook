@@ -15,6 +15,7 @@ final class ThermalAppMonitor {
     private var highUsageTracker = HighUsageTracker()
     private var notificationGate = ThermalNotificationGate()
     private var timer: Timer?
+    private var isWindowVisible = false
 
     private(set) var latestSnapshot: ThermalAppSnapshot?
     var onChange: (() -> Void)?
@@ -24,9 +25,6 @@ final class ThermalAppMonitor {
             UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { _, _ in }
         }
         evaluate()
-        timer = Timer.scheduledTimer(withTimeInterval: 10, repeats: true) { [weak self] _ in
-            MainActor.assumeIsolated { self?.evaluate() }
-        }
     }
 
     func evaluate(now: Date = Date()) {
@@ -44,6 +42,13 @@ final class ThermalAppMonitor {
             sendThermalNotification(state: state, applications: applications)
         }
         onChange?()
+        scheduleNext(for: state)
+    }
+
+    func setWindowVisible(_ visible: Bool) {
+        isWindowVisible = visible
+        guard let state = latestSnapshot?.thermalState else { return }
+        scheduleNext(for: state)
     }
 
     func terminate(pid: pid_t) {
@@ -58,6 +63,14 @@ final class ThermalAppMonitor {
         case .serious: .serious
         case .critical: .critical
         @unknown default: .fair
+        }
+    }
+
+    private func scheduleNext(for state: OwlThermalState) {
+        timer?.invalidate()
+        let interval = MonitoringIntervalPolicy.interval(windowVisible: isWindowVisible, thermalState: state)
+        timer = Timer.scheduledTimer(withTimeInterval: interval, repeats: false) { [weak self] _ in
+            MainActor.assumeIsolated { self?.evaluate() }
         }
     }
 

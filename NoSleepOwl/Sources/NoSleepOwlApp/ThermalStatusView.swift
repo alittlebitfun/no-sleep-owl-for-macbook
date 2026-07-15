@@ -1,11 +1,16 @@
 import AppKit
 import NoSleepOwlCore
 
+private final class FlippedStackView: NSStackView {
+    override var isFlipped: Bool { true }
+}
+
 @MainActor
 final class ThermalStatusView: NSView {
     private let titleLabel = NSTextField(labelWithString: "电脑状态 · 正在检查")
     private let detailLabel = NSTextField(labelWithString: "正在获取应用占用")
-    private let rows = NSStackView()
+    private let rows = FlippedStackView()
+    private let scrollView = NSScrollView()
     var onTerminate: ((pid_t) -> Void)?
 
     override init(frame frameRect: NSRect) {
@@ -20,8 +25,16 @@ final class ThermalStatusView: NSView {
         rows.orientation = .vertical
         rows.spacing = 8
         rows.alignment = .leading
+        scrollView.documentView = rows
+        scrollView.hasVerticalScroller = true
+        scrollView.autohidesScrollers = true
+        scrollView.drawsBackground = false
+        scrollView.borderType = .noBorder
+        scrollView.translatesAutoresizingMaskIntoConstraints = false
+        scrollView.heightAnchor.constraint(equalToConstant: 128).isActive = true
+        scrollView.widthAnchor.constraint(equalToConstant: 358).isActive = true
 
-        let stack = NSStackView(views: [titleLabel, detailLabel, rows])
+        let stack = NSStackView(views: [titleLabel, detailLabel, scrollView])
         stack.orientation = .vertical
         stack.alignment = .leading
         stack.spacing = 8
@@ -45,6 +58,7 @@ final class ThermalStatusView: NSView {
             titleLabel.stringValue = "电脑状态 · 正在检查"
             detailLabel.stringValue = "正在获取应用占用"
             rows.addArrangedSubview(NSTextField(labelWithString: "首次采样约需 10 秒"))
+            layoutRows()
             return
         }
         let presentation = ThermalPresentation(state: snapshot.thermalState)
@@ -56,6 +70,17 @@ final class ThermalStatusView: NSView {
         } else {
             snapshot.applications.forEach { rows.addArrangedSubview(applicationRow($0)) }
         }
+        layoutRows()
+    }
+
+    private func layoutRows() {
+        rows.layoutSubtreeIfNeeded()
+        rows.frame = NSRect(
+            x: 0,
+            y: 0,
+            width: scrollView.contentSize.width,
+            height: max(scrollView.contentSize.height, rows.fittingSize.height)
+        )
     }
 
     private func applicationRow(_ app: MonitoredApplication) -> NSView {

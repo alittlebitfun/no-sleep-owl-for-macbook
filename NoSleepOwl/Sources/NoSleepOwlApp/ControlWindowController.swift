@@ -41,6 +41,7 @@ final class ControlWindowController: NSObject, NSWindowDelegate {
         NSApp.activate(ignoringOtherApps: true)
         window.center()
         window.makeKeyAndOrderFront(nil)
+        thermalMonitor.setWindowVisible(true)
         startTimer()
     }
 
@@ -59,7 +60,11 @@ final class ControlWindowController: NSObject, NSWindowDelegate {
         updateDuration()
     }
 
-    func windowWillClose(_ notification: Notification) { timer?.invalidate(); timer = nil }
+    func windowWillClose(_ notification: Notification) {
+        timer?.invalidate()
+        timer = nil
+        thermalMonitor.setWindowVisible(false)
+    }
 
     private func buildUI() {
         emoji.font = .systemFont(ofSize: 92)

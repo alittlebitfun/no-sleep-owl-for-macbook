@@ -15,6 +15,7 @@ final class ApplicationUsageSampler {
     }
 
     private var previous: [pid_t: PreviousSample] = [:]
+    private var executablePathCache: [pid_t: String] = [:]
     private let protectedBundleIDs: Set<String> = [
         "com.apple.finder",
         "com.apple.systempreferences",
@@ -64,8 +65,20 @@ final class ApplicationUsageSampler {
         let byteCount = Int32(pids.count * MemoryLayout<pid_t>.size)
         let count = proc_listallpids(&pids, byteCount)
         guard count > 0 else { return [] }
+        let activePIDs = Set(pids.prefix(Int(count)).filter { $0 > 0 })
+        executablePathCache = executablePathCache.filter { activePIDs.contains($0.key) }
         return pids.prefix(Int(count)).compactMap { pid in
-            guard pid > 0, let path = executablePath(pid: pid), let time = cpuTime(pid: pid) else { return nil }
+            guard pid > 0 else { return nil }
+            let path: String
+            if let cached = executablePathCache[pid] {
+                path = cached
+            } else if let discovered = executablePath(pid: pid) {
+                executablePathCache[pid] = discovered
+                path = discovered
+            } else {
+                return nil
+            }
+            guard let time = cpuTime(pid: pid) else { return nil }
             return ProcessCPURecord(path: path, cpuTime: time)
         }
     }
