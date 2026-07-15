@@ -82,6 +82,14 @@ test("bird and owl presentations are distinct") {
     try expect(BirdPresentation(mode: .owl).toggleTitle == "切换到小鸟模式", "wrong owl action")
 }
 
+test("primary menu bar click opens the control window") {
+    try expect(StatusBarInteraction.action(for: .primary) == .openControlWindow, "primary click must open window")
+}
+
+test("secondary menu bar click opens the context menu") {
+    try expect(StatusBarInteraction.action(for: .secondary) == .showContextMenu, "secondary click must show menu")
+}
+
 test("duration formatter covers seconds minutes and hours") {
     try expect(OwlDurationFormatter.string(seconds: 0) == "00:00", "wrong zero duration")
     try expect(OwlDurationFormatter.string(seconds: 65) == "01:05", "wrong minute duration")
@@ -114,6 +122,59 @@ test("thermal policy warns at serious and exits at critical") {
     try expect(policy.evaluate(serious) == .warn(.thermalSerious), "expected thermal warning")
     try expect(policy.evaluate(serious) == .none, "thermal warning must fire once")
     try expect(policy.evaluate(critical) == .exitOwl(reason: .thermalCritical), "expected thermal exit")
+}
+
+test("thermal presentation maps all system states") {
+    try expect(ThermalPresentation(state: .nominal).title == "正常", "wrong nominal title")
+    try expect(ThermalPresentation(state: .fair).title == "偏热", "wrong fair title")
+    try expect(ThermalPresentation(state: .serious).title == "严重", "wrong serious title")
+    try expect(ThermalPresentation(state: .critical).title == "危急", "wrong critical title")
+}
+
+test("usage tracker sorts and keeps three applications") {
+    var tracker = HighUsageTracker()
+    let result = tracker.evaluate([
+        AppUsage(pid: 1, name: "A", cpuPercent: 20, canTerminate: true),
+        AppUsage(pid: 2, name: "B", cpuPercent: 90, canTerminate: true),
+        AppUsage(pid: 3, name: "C", cpuPercent: 40, canTerminate: true),
+        AppUsage(pid: 4, name: "D", cpuPercent: 60, canTerminate: true)
+    ])
+    try expect(result.map(\.name) == ["B", "D", "C"], "expected descending top three")
+}
+
+test("usage tracker requires two samples above eighty percent") {
+    var tracker = HighUsageTracker()
+    let first = tracker.evaluate([AppUsage(pid: 8, name: "Render", cpuPercent: 81, canTerminate: true)])
+    let second = tracker.evaluate([AppUsage(pid: 8, name: "Render", cpuPercent: 82, canTerminate: true)])
+    try expect(first[0].isSustainedHigh == false, "first spike must not alert")
+    try expect(second[0].isSustainedHigh == true, "second high sample must alert")
+}
+
+test("CPU calculator uses process time delta and clamps negative values") {
+    try expect(CPUUsageCalculator.percent(previousCPUTime: 2, currentCPUTime: 3, elapsed: 2) == 50, "wrong CPU percent")
+    try expect(CPUUsageCalculator.percent(previousCPUTime: 3, currentCPUTime: 2, elapsed: 1) == 0, "negative CPU must clamp")
+    try expect(CPUUsageCalculator.percent(previousCPUTime: 1, currentCPUTime: 2, elapsed: 0) == 0, "zero elapsed must return zero")
+}
+
+test("thermal notification gate waits ten minutes") {
+    var gate = ThermalNotificationGate(cooldown: 600)
+    let start = Date(timeIntervalSince1970: 1_000)
+    try expect(gate.shouldNotify(state: .serious, now: start), "first serious state must notify")
+    try expect(!gate.shouldNotify(state: .critical, now: start.addingTimeInterval(599)), "cooldown must suppress")
+    try expect(gate.shouldNotify(state: .serious, now: start.addingTimeInterval(600)), "notification must resume after cooldown")
+    try expect(!gate.shouldNotify(state: .fair, now: start.addingTimeInterval(1_200)), "fair state must not notify")
+}
+
+test("notifications require an app bundle") {
+    try expect(AppBundleEnvironment.supportsNotifications(bundleURL: URL(fileURLWithPath: "/Applications/Owl.app")), "app bundle must support notifications")
+    try expect(!AppBundleEnvironment.supportsNotifications(bundleURL: URL(fileURLWithPath: "/tmp/debug/")), "debug executable must skip notifications")
+}
+
+test("application usage includes only regular user apps") {
+    try expect(ApplicationVisibilityPolicy.shouldInclude(isRegular: true, hasBundleIdentifier: true, isCurrentProcess: false), "regular app must be included")
+    try expect(!ApplicationVisibilityPolicy.shouldInclude(isRegular: false, hasBundleIdentifier: true, isCurrentProcess: false), "background service must be excluded")
+    try expect(!ApplicationVisibilityPolicy.shouldInclude(isRegular: true, hasBundleIdentifier: false, isCurrentProcess: false), "unidentified process must be excluded")
+    try expect(!ApplicationVisibilityPolicy.shouldInclude(isRegular: true, hasBundleIdentifier: true, isCurrentProcess: true), "own process must be excluded")
 }
 
 test("helper restores after fifteen seconds without heartbeat") {

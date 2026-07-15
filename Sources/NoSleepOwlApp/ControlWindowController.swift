@@ -7,6 +7,7 @@ final class ControlWindowController: NSObject, NSWindowDelegate {
     private let launchController: LaunchAtLoginController
     private let sleepController: PrivilegedSleepController
     private let safetyMonitor: SafetyMonitor
+    private let thermalMonitor: ThermalAppMonitor
     private let window: NSWindow
     private let emoji = NSTextField(labelWithString: "")
     private let titleLabel = NSTextField(labelWithString: "")
@@ -18,14 +19,16 @@ final class ControlWindowController: NSObject, NSWindowDelegate {
     private let batteryButton = NSButton(checkboxWithTitle: "使用电池时也允许合盖守夜", target: nil, action: nil)
     private let helperLabel = NSTextField(labelWithString: "")
     private let helperButton = NSButton(title: "安装 / 批准辅助程序", target: nil, action: nil)
+    private let thermalView = ThermalStatusView()
     private var timer: Timer?
 
-    init(store: OwlModeStore, launchController: LaunchAtLoginController, sleepController: PrivilegedSleepController, safetyMonitor: SafetyMonitor) {
+    init(store: OwlModeStore, launchController: LaunchAtLoginController, sleepController: PrivilegedSleepController, safetyMonitor: SafetyMonitor, thermalMonitor: ThermalAppMonitor) {
         self.store = store
         self.launchController = launchController
         self.sleepController = sleepController
         self.safetyMonitor = safetyMonitor
-        window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 480, height: 570), styleMask: [.titled, .closable, .miniaturizable], backing: .buffered, defer: false)
+        self.thermalMonitor = thermalMonitor
+        window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 480, height: 760), styleMask: [.titled, .closable, .miniaturizable], backing: .buffered, defer: false)
         super.init()
         window.title = "不休眠猫头鹰"
         window.isReleasedWhenClosed = false
@@ -52,6 +55,7 @@ final class ControlWindowController: NSObject, NSWindowDelegate {
         batteryButton.state = safetyMonitor.powerPolicy == .allowBattery ? .on : .off
         helperLabel.stringValue = sleepController.statusText
         helperButton.isHidden = sleepController.isReady
+        thermalView.update(snapshot: thermalMonitor.latestSnapshot)
         updateDuration()
     }
 
@@ -82,7 +86,8 @@ final class ControlWindowController: NSObject, NSWindowDelegate {
         helperButton.target = self
         helperButton.action = #selector(registerHelper)
 
-        let stack = NSStackView(views: [emoji, titleLabel, detailLabel, durationLabel, toggleButton, helperLabel, helperButton, batteryButton, loginButton, errorLabel])
+        thermalView.onTerminate = { [weak thermalMonitor] pid in thermalMonitor?.terminate(pid: pid) }
+        let stack = NSStackView(views: [emoji, titleLabel, detailLabel, durationLabel, toggleButton, thermalView, helperLabel, helperButton, batteryButton, loginButton, errorLabel])
         stack.orientation = .vertical
         stack.alignment = .centerX
         stack.spacing = 18
