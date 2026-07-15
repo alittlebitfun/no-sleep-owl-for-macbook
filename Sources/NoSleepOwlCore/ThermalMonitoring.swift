@@ -53,7 +53,14 @@ public struct HighUsageTracker: Sendable {
                 isSustainedHigh: count >= 2
             )
         }
-        return Array(marked.sorted { $0.cpuPercent > $1.cpuPercent }.prefix(3))
+        return Array(marked.sorted { $0.cpuPercent > $1.cpuPercent }.prefix(7))
+    }
+}
+
+public enum MonitoringIntervalPolicy {
+    public static func interval(windowVisible: Bool, thermalState: OwlThermalState) -> TimeInterval {
+        if !windowVisible && thermalState == .nominal { return 20 }
+        return 10
     }
 }
 

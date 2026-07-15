@@ -131,15 +131,19 @@ test("thermal presentation maps all system states") {
     try expect(ThermalPresentation(state: .critical).title == "危急", "wrong critical title")
 }
 
-test("usage tracker sorts and keeps three applications") {
+test("usage tracker sorts and keeps seven applications") {
     var tracker = HighUsageTracker()
     let result = tracker.evaluate([
         AppUsage(pid: 1, name: "A", cpuPercent: 20, canTerminate: true),
         AppUsage(pid: 2, name: "B", cpuPercent: 90, canTerminate: true),
         AppUsage(pid: 3, name: "C", cpuPercent: 40, canTerminate: true),
-        AppUsage(pid: 4, name: "D", cpuPercent: 60, canTerminate: true)
+        AppUsage(pid: 4, name: "D", cpuPercent: 60, canTerminate: true),
+        AppUsage(pid: 5, name: "E", cpuPercent: 10, canTerminate: true),
+        AppUsage(pid: 6, name: "F", cpuPercent: 30, canTerminate: true),
+        AppUsage(pid: 7, name: "G", cpuPercent: 50, canTerminate: true),
+        AppUsage(pid: 8, name: "H", cpuPercent: 70, canTerminate: true)
     ])
-    try expect(result.map(\.name) == ["B", "D", "C"], "expected descending top three")
+    try expect(result.map(\.name) == ["B", "H", "D", "G", "C", "F", "A"], "expected descending top seven")
 }
 
 test("usage tracker requires two samples above eighty percent") {
@@ -190,6 +194,13 @@ test("CPU display keeps one decimal below ten percent") {
     try expect(CPUUsageFormatter.string(0.24) == "0.2% CPU", "small usage must remain visible")
     try expect(CPUUsageFormatter.string(8.86) == "8.9% CPU", "single digit usage needs one decimal")
     try expect(CPUUsageFormatter.string(18.4) == "18% CPU", "large usage should be compact")
+}
+
+test("monitoring interval slows only for hidden nominal state") {
+    try expect(MonitoringIntervalPolicy.interval(windowVisible: false, thermalState: .nominal) == 20, "hidden nominal interval must be twenty seconds")
+    try expect(MonitoringIntervalPolicy.interval(windowVisible: true, thermalState: .nominal) == 10, "visible interval must be ten seconds")
+    try expect(MonitoringIntervalPolicy.interval(windowVisible: false, thermalState: .fair) == 10, "elevated thermal interval must be ten seconds")
+    try expect(MonitoringIntervalPolicy.interval(windowVisible: false, thermalState: .serious) == 10, "serious interval must be ten seconds")
 }
 
 test("helper restores after fifteen seconds without heartbeat") {
