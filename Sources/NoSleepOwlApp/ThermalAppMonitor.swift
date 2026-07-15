@@ -65,7 +65,7 @@ final class ThermalAppMonitor {
         let content = UNMutableNotificationContent()
         content.title = state == .critical ? "Mac 热状态危急" : "Mac 温度压力较高"
         if let top = applications.first {
-            content.body = "\(top.usage.name) 当前占用约 \(Int(top.usage.cpuPercent.rounded()))% CPU，请检查通风和运行任务。"
+            content.body = "\(top.usage.name) 当前占用约 \(CPUUsageFormatter.string(top.usage.cpuPercent))，请检查通风和运行任务。"
         } else {
             content.body = "请改善通风并检查正在运行的应用。"
         }

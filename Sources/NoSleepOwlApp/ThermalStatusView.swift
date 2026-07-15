@@ -68,7 +68,7 @@ final class ThermalStatusView: NSView {
         name.lineBreakMode = .byTruncatingTail
         name.font = .systemFont(ofSize: 13, weight: app.usage.isSustainedHigh ? .semibold : .regular)
         if app.usage.isSustainedHigh { name.textColor = .systemRed }
-        let cpu = NSTextField(labelWithString: "\(Int(app.usage.cpuPercent.rounded()))% CPU")
+        let cpu = NSTextField(labelWithString: CPUUsageFormatter.string(app.usage.cpuPercent))
         cpu.font = .monospacedDigitSystemFont(ofSize: 12, weight: .medium)
         cpu.textColor = app.usage.isSustainedHigh ? .systemRed : .secondaryLabelColor
 

@@ -24,6 +24,7 @@ final class ApplicationUsageSampler {
 
     func sample(now: Date = Date()) -> [MonitoredApplication] {
         let ownPID = ProcessInfo.processInfo.processIdentifier
+        let processRecords = allProcessRecords()
         var activePIDs = Set<pid_t>()
         let results = NSWorkspace.shared.runningApplications.compactMap { app -> MonitoredApplication? in
             let pid = app.processIdentifier
@@ -34,7 +35,8 @@ final class ApplicationUsageSampler {
                   ),
                   let name = app.localizedName,
                   !name.isEmpty,
-                  let cpuTime = cpuTime(pid: pid) else { return nil }
+                  let bundlePath = app.bundleURL?.path else { return nil }
+            let cpuTime = ApplicationCPUAggregator.totalCPUTime(bundlePath: bundlePath, records: processRecords)
             activePIDs.insert(pid)
             let cpu: Double
             if let old = previous[pid] {
@@ -55,6 +57,26 @@ final class ApplicationUsageSampler {
         }
         previous = previous.filter { activePIDs.contains($0.key) }
         return results
+    }
+
+    private func allProcessRecords() -> [ProcessCPURecord] {
+        var pids = [pid_t](repeating: 0, count: 8_192)
+        let byteCount = Int32(pids.count * MemoryLayout<pid_t>.size)
+        let count = proc_listallpids(&pids, byteCount)
+        guard count > 0 else { return [] }
+        return pids.prefix(Int(count)).compactMap { pid in
+            guard pid > 0, let path = executablePath(pid: pid), let time = cpuTime(pid: pid) else { return nil }
+            return ProcessCPURecord(path: path, cpuTime: time)
+        }
+    }
+
+    private func executablePath(pid: pid_t) -> String? {
+        var buffer = [CChar](repeating: 0, count: 4_096)
+        let length = buffer.withUnsafeMutableBytes { bytes in
+            proc_pidpath(pid, bytes.baseAddress, UInt32(bytes.count))
+        }
+        guard length > 0 else { return nil }
+        return String(decoding: buffer.prefix(Int(length)).map { UInt8(bitPattern: $0) }, as: UTF8.self)
     }
 
     private func cpuTime(pid: pid_t) -> Double? {

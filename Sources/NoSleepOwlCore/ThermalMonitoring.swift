@@ -89,3 +89,29 @@ public enum ApplicationVisibilityPolicy {
         isRegular && hasBundleIdentifier && !isCurrentProcess
     }
 }
+
+public struct ProcessCPURecord: Sendable {
+    public let path: String
+    public let cpuTime: Double
+
+    public init(path: String, cpuTime: Double) {
+        self.path = path
+        self.cpuTime = cpuTime
+    }
+}
+
+public enum ApplicationCPUAggregator {
+    public static func totalCPUTime(bundlePath: String, records: [ProcessCPURecord]) -> Double {
+        let prefix = bundlePath.hasSuffix("/") ? bundlePath : bundlePath + "/"
+        return records.reduce(0) { total, record in
+            record.path == bundlePath || record.path.hasPrefix(prefix) ? total + record.cpuTime : total
+        }
+    }
+}
+
+public enum CPUUsageFormatter {
+    public static func string(_ percent: Double) -> String {
+        if percent < 10 { return String(format: "%.1f%% CPU", percent) }
+        return String(format: "%.0f%% CPU", percent)
+    }
+}
