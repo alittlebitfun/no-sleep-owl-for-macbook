@@ -5,7 +5,7 @@ public enum PowerPolicy: String, Codable, CaseIterable, Sendable {
     case allowBattery
 }
 
-public enum OwlThermalState: Sendable {
+public enum OwlThermalState: Sendable, Equatable {
     case nominal, fair, serious, critical
 }
 
