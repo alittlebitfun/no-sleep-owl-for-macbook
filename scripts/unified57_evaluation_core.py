@@ -19,6 +19,11 @@ from collections import Counter, OrderedDict
 from pathlib import Path
 from typing import Any, Callable, Iterable, Mapping, Sequence
 
+try:
+    from scripts.unified56_contract import JD23_TAGS
+except ImportError:  # direct execution with scripts/ as sys.path[0]
+    from unified56_contract import JD23_TAGS  # type: ignore
+
 
 EXPECTED_MODE_COUNTS = {"pn": 36, "pu": 20, "unsupported": 1}
 EXPECTED_CATEGORIES = ("局部结构", "廓形", "工艺", "面辅料")
@@ -222,6 +227,8 @@ def raw_predictions(
 ) -> list[int]:
     validate_schema(schema)
     _validate_vector("scores", scores, len(schema["labels"]))
+    if any(not math.isfinite(float(score)) for score in scores):
+        raise ValueError("scores must be finite")
     result: list[int] = []
     for index, tag in enumerate(schema["labels"]):
         mode = schema["label_training_modes"][tag]
@@ -472,6 +479,12 @@ def _slice_metrics(
         return report
 
     overall = named(evaluate_pn_slice(rows, binaries, pn_indices))
+    indices = _index(schema)
+    if len(JD23_TAGS) != 23 or any(tag not in indices for tag in JD23_TAGS):
+        raise ValueError("canonical JD23 tag contract is incompatible with Unified57 schema")
+    jd23_indices = [indices[tag] for tag in JD23_TAGS]
+    if any(schema["label_training_modes"][tag] != "pn" for tag in JD23_TAGS):
+        raise ValueError("all canonical JD23 tags must use PN supervision")
 
     def subset(predicate: Callable[[Mapping[str, Any]], bool]) -> tuple[list[Mapping[str, Any]], list[Sequence[int]]]:
         pairs = [(item, binary) for item, binary in zip(rows, binaries) if predicate(item)]
@@ -490,7 +503,7 @@ def _slice_metrics(
     )
     return {
         "overall_36pn": overall,
-        "jd23_clean": named(evaluate_pn_slice(jd_rows, jd_binary, pn_indices)),
+        "jd23_clean": named(evaluate_pn_slice(jd_rows, jd_binary, jd23_indices)),
         "dictionary_pn_clean": named(evaluate_pn_slice(dict_rows, dict_binary, pn_indices)),
         "mixed_exact_audit": {
             "record_count": len(mixed_rows),
@@ -600,6 +613,8 @@ def render_all_scores(row: Mapping[str, Any], schema: Mapping[str, Any]) -> dict
     validate_schema(schema)
     scores = row.get("scores")
     _validate_vector("scores", scores, len(schema["labels"]))
+    if any(not math.isfinite(float(score)) for score in scores):
+        raise ValueError("scores must be finite")
     output: OrderedDict[str, Any] = OrderedDict()
     for key in ("record_id", "image_path", "image_sha256", "source", "sources"):
         if key in row:
@@ -642,6 +657,25 @@ def render_selected_only(
     return payload
 
 
+def render_selected_with_confidence(
+    scores: Sequence[float], thresholds: Mapping[str, Any], schema: Mapping[str, Any]
+) -> dict[str, list[dict[str, str]]]:
+    """Render the same final winners with user-facing two-decimal confidence."""
+
+    selected = render_selected_only(scores, thresholds, schema)
+    indices = _index(schema)
+    payload: OrderedDict[str, list[dict[str, str]]] = OrderedDict()
+    for category, tags in selected.items():
+        payload[category] = [
+            {
+                "name": tag,
+                "confidence": f"{min(1.0, max(0.0, float(scores[indices[tag]]))):.2f}",
+            }
+            for tag in tags
+        ]
+    return payload
+
+
 def validate_selected_only(
     payload: Mapping[str, Any], schema: Mapping[str, Any]
 ) -> Mapping[str, Any]:
@@ -671,6 +705,30 @@ def validate_selected_only(
         }
         if not set(selected) <= allowed_category:
             raise ValueError(f"tag assigned to wrong category {category}")
+    return payload
+
+
+def validate_selected_with_confidence(
+    payload: Mapping[str, Any], schema: Mapping[str, Any]
+) -> Mapping[str, Any]:
+    if not isinstance(payload, Mapping) or tuple(payload) != EXPECTED_CATEGORIES:
+        raise ValueError("selected-with-confidence output must contain the four categories in order")
+    names: OrderedDict[str, list[str]] = OrderedDict()
+    for category, values in payload.items():
+        if not isinstance(values, list):
+            raise ValueError("selected-with-confidence category values must be arrays")
+        names[category] = []
+        for item in values:
+            if not isinstance(item, Mapping) or tuple(item) != ("name", "confidence"):
+                raise ValueError("selected-with-confidence item must contain name and confidence")
+            name = item["name"]
+            confidence = item["confidence"]
+            if not isinstance(name, str):
+                raise ValueError("selected-with-confidence name must be a string")
+            if not isinstance(confidence, str) or not TWO_DECIMAL_RE.fullmatch(confidence):
+                raise ValueError("selected-with-confidence confidence must be a two-decimal string")
+            names[category].append(name)
+    validate_selected_only(names, schema)
     return payload
 
 
@@ -775,6 +833,11 @@ class BufferedPredictionShard:
             raise ValueError("prediction shard is closed")
         if self._complete:
             raise ValueError("completed prediction shard cannot be appended")
+        expected_next = self.next_local_index + len(rows)
+        if int(next_local_index) != expected_next:
+            raise ValueError(
+                f"next_local_index must advance contiguously to {expected_next}, got {next_local_index}"
+            )
         pending_ids: set[str] = set()
         for item in rows:
             record_id = item.get("record_id")
@@ -948,6 +1011,11 @@ def verify_reproduction(
     if len(reference) != 32 or len(reproduced) != 32:
         raise ValueError("verification requires exactly 32 reference and reproduced records")
     reference_ids = [item.get("record_id") for item in reference]
+    reproduced_ids = [item.get("record_id") for item in reproduced]
+    if any(not isinstance(record_id, str) or not record_id for record_id in reference_ids):
+        raise ValueError("reference verification record ids must be non-empty strings")
+    if any(not isinstance(record_id, str) or not record_id for record_id in reproduced_ids):
+        raise ValueError("reproduced verification record ids must be non-empty strings")
     if len(set(reference_ids)) != 32:
         raise ValueError("reference verification record ids must be unique")
     reproduced_by_id = {item.get("record_id"): item for item in reproduced}
@@ -993,9 +1061,11 @@ __all__ = [
     "raw_predictions",
     "render_all_scores",
     "render_selected_only",
+    "render_selected_with_confidence",
     "select_verification_records",
     "validate_all_scores",
     "validate_schema",
     "validate_selected_only",
+    "validate_selected_with_confidence",
     "verify_reproduction",
 ]

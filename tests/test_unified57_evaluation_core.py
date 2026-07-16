@@ -13,10 +13,12 @@ from scripts.unified57_evaluation_core import (
     raw_predictions,
     render_all_scores,
     render_selected_only,
+    render_selected_with_confidence,
     select_verification_records,
     validate_all_scores,
     validate_schema,
     validate_selected_only,
+    validate_selected_with_confidence,
     verify_reproduction,
 )
 
@@ -243,6 +245,25 @@ def test_pn_macro_exposes_both_class_f1_separately():
     assert report["macro"]["labels_with_both_classes"] == 1
 
 
+def test_jd23_clean_excludes_implication_derived_non_jd_known_cells():
+    known = vector({"连帽": 1, "拆卸帽": 1, "帽口抽绳": 1})
+    item = row(
+        scores=vector({"连帽": 0.1, "拆卸帽": 0.1, "帽口抽绳": 0.1}),
+        labels=vector(),
+        known=known,
+        sources=["jd_complete23"],
+    )
+    report = evaluate_views([item], thresholds(), SCHEMA)
+    jd = report["raw_thresholded"]["jd23_clean"]
+    assert jd["micro"]["known_cells"] == 1
+    assert list(jd["per_label"]) == [
+        "长款", "中款", "短款", "H型", "O型", "X型", "A型", "宽松",
+        "连帽", "毛领", "立领", "翻领", "无领", "压胶充绒", "压胶袋盖",
+        "压胶门襟", "平行绗线", "菱形绗线", "葫芦型绗线", "反光条",
+        "按扣", "腰带", "插肩袖",
+    ]
+
+
 def test_renderers_enforce_57_two_decimal_scores_and_four_categories():
     scores = vector({"连帽": 0.876, "假两件": 0.99, "H型": 0.501})
     all_scores = render_all_scores(row(scores=scores), SCHEMA)
@@ -257,10 +278,28 @@ def test_renderers_enforce_57_two_decimal_scores_and_four_categories():
     assert validate_selected_only(selected, SCHEMA) is selected
 
 
+@pytest.mark.parametrize("bad", [float("nan"), float("inf"), float("-inf")])
+def test_all_scores_rejects_nonfinite_values(bad):
+    with pytest.raises(ValueError, match="finite"):
+        render_all_scores(row(scores=vector({"连帽": bad})), SCHEMA)
+
+
 def test_selected_validator_rejects_two_tags_from_same_subcategory():
     payload = {"局部结构": [], "廓形": [], "工艺": ["压胶充绒", "压胶袋盖"], "面辅料": []}
     with pytest.raises(ValueError, match="subcategory"):
         validate_selected_only(payload, SCHEMA)
+
+
+def test_selected_with_confidence_reuses_winner_and_two_decimal_contract():
+    scores = vector({"压胶充绒": 0.876, "压胶袋盖": 0.812, "织带": 0.555})
+    payload = render_selected_with_confidence(scores, thresholds(), SCHEMA)
+    assert payload["工艺"] == [{"name": "压胶充绒", "confidence": "0.88"}]
+    assert payload["面辅料"] == [{"name": "织带", "confidence": "0.56"}]
+    assert validate_selected_with_confidence(payload, SCHEMA) is payload
+    invalid = json.loads(json.dumps(payload))
+    invalid["工艺"][0]["confidence"] = "0.876"
+    with pytest.raises(ValueError, match="two-decimal"):
+        validate_selected_with_confidence(invalid, SCHEMA)
 
 
 def test_buffered_shard_syncs_at_1000_and_recovers_durable_offset(tmp_path):
@@ -293,6 +332,13 @@ def test_buffered_shard_time_sync_and_metadata_drift(tmp_path):
     shard.close(complete=False)
     with pytest.raises(ValueError, match="metadata"):
         BufferedPredictionShard(path, {"split": "test", "rank": 0})
+
+
+def test_buffered_shard_rejects_cursor_gaps(tmp_path):
+    shard = BufferedPredictionShard(tmp_path / "rank00.part.jsonl", {"split": "test", "rank": 0})
+    with pytest.raises(ValueError, match="next_local_index"):
+        shard.append_batch([{"record_id": "a"}], 2)
+    shard.close(complete=False)
 
 
 def test_buffered_shard_crash_before_first_sync_recovers_from_zero(tmp_path):
@@ -340,3 +386,13 @@ def test_verification_selection_covers_sources_supervision_and_aspect_buckets():
     assert any(value < 0.8 for value in ratios)
     assert any(0.8 <= value <= 1.25 for value in ratios)
     assert any(value > 1.25 for value in ratios)
+
+
+def test_verification_rejects_empty_record_ids():
+    empty = {"局部结构": [], "廓形": [], "工艺": [], "面辅料": []}
+    reference = [{"record_id": f"r{i}", "scores": vector(), "selected": empty} for i in range(32)]
+    reproduced = json.loads(json.dumps(reference))
+    reference[0]["record_id"] = ""
+    reproduced[0]["record_id"] = ""
+    with pytest.raises(ValueError, match="non-empty"):
+        verify_reproduction(reference, reproduced, SCHEMA)
