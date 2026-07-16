@@ -6,15 +6,19 @@ final class StatusItemController: NSObject {
     private let store: OwlModeStore
     private let launchController: LaunchAtLoginController
     private let thermalMonitor: ThermalAppMonitor
+    private let preferences: AppPreferences
     private let openWindow: () -> Void
+    private let openSettings: () -> Void
     private let quit: () -> Void
     private let statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
 
-    init(store: OwlModeStore, launchController: LaunchAtLoginController, thermalMonitor: ThermalAppMonitor, openWindow: @escaping () -> Void, quit: @escaping () -> Void) {
+    init(store: OwlModeStore, launchController: LaunchAtLoginController, thermalMonitor: ThermalAppMonitor, preferences: AppPreferences, openWindow: @escaping () -> Void, openSettings: @escaping () -> Void, quit: @escaping () -> Void) {
         self.store = store
         self.launchController = launchController
         self.thermalMonitor = thermalMonitor
+        self.preferences = preferences
         self.openWindow = openWindow
+        self.openSettings = openSettings
         self.quit = quit
         super.init()
         if let button = statusItem.button {
@@ -30,11 +34,12 @@ final class StatusItemController: NSObject {
     }
 
     func refresh() {
-        let presentation = BirdPresentation(mode: store.mode)
+        let presentation = BirdPresentation(mode: store.mode, language: preferences.snapshot.language)
+        let strings = AppStrings(language: preferences.snapshot.language)
         statusItem.button?.title = ""
-        statusItem.button?.image = BirdIconRenderer.image(for: store.mode)
+        statusItem.button?.image = BirdIconRenderer.image(for: store.mode, language: preferences.snapshot.language)
         statusItem.button?.imagePosition = .imageOnly
-        statusItem.button?.toolTip = "不休眠猫头鹰 · \(presentation.statusTitle)"
+        statusItem.button?.toolTip = "\(strings.appName) · \(presentation.statusTitle)"
     }
 
     @objc private func clicked(_ sender: Any?) {
@@ -53,31 +58,36 @@ final class StatusItemController: NSObject {
     }
 
     private func showMenu(from sender: NSButton?, event: NSEvent?) {
-        let p = BirdPresentation(mode: store.mode)
+        let snapshot = preferences.snapshot
+        let strings = AppStrings(language: snapshot.language)
+        let p = BirdPresentation(mode: store.mode, language: snapshot.language)
         let menu = NSMenu()
         let status = NSMenuItem(title: "\(p.emoji)  \(p.statusTitle)", action: nil, keyEquivalent: "")
         status.isEnabled = false
         menu.addItem(status)
-        if let snapshot = thermalMonitor.latestSnapshot {
-            let thermal = ThermalPresentation(state: snapshot.thermalState)
-            let top = snapshot.applications.first.map { " · \($0.usage.name) \(CPUUsageFormatter.string($0.usage.cpuPercent))" } ?? ""
-            let item = NSMenuItem(title: "电脑状态：\(thermal.title)\(top)", action: nil, keyEquivalent: "")
+        let displayMode = MonitoringDisplayPolicy.mode(thermal: snapshot.showsThermalStatus, applications: snapshot.showsHighUsageApps)
+        if displayMode != .hidden, let monitorSnapshot = thermalMonitor.latestSnapshot {
+            let thermal = ThermalPresentation(state: monitorSnapshot.thermalState, language: snapshot.language)
+            let thermalText = snapshot.showsThermalStatus ? thermal.title : strings.applicationUsageTitle
+            let top = snapshot.showsHighUsageApps ? (monitorSnapshot.applications.first.map { " · \($0.usage.name) \(CPUUsageFormatter.string($0.usage.cpuPercent))" } ?? "") : ""
+            let item = NSMenuItem(title: strings.computerStatus(thermalText, top: top), action: nil, keyEquivalent: "")
             item.isEnabled = false
             menu.addItem(item)
-        } else {
-            let item = NSMenuItem(title: "电脑状态：正在获取应用占用", action: nil, keyEquivalent: "")
+        } else if displayMode != .hidden {
+            let item = NSMenuItem(title: strings.computerStatusChecking, action: nil, keyEquivalent: "")
             item.isEnabled = false
             menu.addItem(item)
         }
         menu.addItem(.separator())
         menu.addItem(item(p.toggleTitle, #selector(toggleMode)))
-        menu.addItem(item("打开不休眠猫头鹰…", #selector(openControlWindow)))
+        menu.addItem(item(strings.openApplication, #selector(openControlWindow)))
+        menu.addItem(item(strings.settingsMenuTitle, #selector(openSettingsWindow)))
         menu.addItem(.separator())
-        let login = item("登录时自动启动", #selector(toggleLogin))
+        let login = item(strings.loginAtStartup, #selector(toggleLogin))
         login.state = launchController.isEnabled ? .on : .off
         menu.addItem(login)
         menu.addItem(.separator())
-        menu.addItem(item("退出不休眠猫头鹰", #selector(quitApp)))
+        menu.addItem(item(strings.quitApplication, #selector(quitApp)))
         if let sender, let event {
             NSMenu.popUpContextMenu(menu, with: event, for: sender)
         } else {
@@ -95,6 +105,7 @@ final class StatusItemController: NSObject {
 
     @objc private func toggleMode() { store.toggle() }
     @objc private func openControlWindow() { openWindow() }
+    @objc private func openSettingsWindow() { openSettings() }
     @objc private func toggleLogin() { try? launchController.setEnabled(!launchController.isEnabled) }
     @objc private func quitApp() { quit() }
 }

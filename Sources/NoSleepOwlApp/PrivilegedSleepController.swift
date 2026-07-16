@@ -23,13 +23,14 @@ final class PrivilegedSleepController: SleepAssertionControlling {
     private var connection: NSXPCConnection?
     private var heartbeatTimer: Timer?
 
-    var statusText: String {
+    func statusText(language: AppLanguage = .zhHans) -> String {
+        let strings = AppStrings(language: language)
         switch service.status {
-        case .enabled: return "辅助程序已批准 · 日常切换无需密码"
-        case .requiresApproval: return "等待在系统设置中批准"
-        case .notRegistered: return "辅助程序尚未注册"
-        case .notFound: return "安装包中未找到辅助程序"
-        @unknown default: return "辅助程序状态未知"
+        case .enabled: return strings.helperApproved
+        case .requiresApproval: return strings.helperNeedsApproval
+        case .notRegistered: return strings.helperNotRegistered
+        case .notFound: return strings.helperNotFound
+        @unknown default: return strings.helperUnknown
         }
     }
 
@@ -41,7 +42,7 @@ final class PrivilegedSleepController: SleepAssertionControlling {
             SMAppService.openSystemSettingsLoginItems()
             throw PrivilegedSleepError.needsApproval
         }
-        guard service.status == .enabled else { throw PrivilegedSleepError.unavailable(statusText) }
+        guard service.status == .enabled else { throw PrivilegedSleepError.unavailable(statusText()) }
     }
 
     func acquire() throws -> UInt32 {

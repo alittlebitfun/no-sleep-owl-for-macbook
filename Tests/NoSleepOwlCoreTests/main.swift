@@ -147,6 +147,15 @@ test("menu bar icon uses only system managed placement") {
     try expect(StatusItemPlacementPolicy.persistsCustomPosition == true, "the last visible native position should survive relaunches")
 }
 
+test("settings entry is always available") {
+    try expect(StatusMenuPolicy.includesSettings, "settings must be reachable")
+}
+
+test("application sampling follows its visibility preference") {
+    try expect(MonitoringSamplingPolicy.samplesApplications(showsHighUsageApps: true), "visible list samples")
+    try expect(!MonitoringSamplingPolicy.samplesApplications(showsHighUsageApps: false), "hidden list pauses")
+}
+
 test("duration formatter covers seconds minutes and hours") {
     try expect(OwlDurationFormatter.string(seconds: 0) == "00:00", "wrong zero duration")
     try expect(OwlDurationFormatter.string(seconds: 65) == "01:05", "wrong minute duration")
