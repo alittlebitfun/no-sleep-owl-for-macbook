@@ -17,6 +17,7 @@ import argparse
 import csv
 import hashlib
 import json
+import math
 import random
 from collections import Counter, defaultdict
 from dataclasses import dataclass, field
@@ -904,13 +905,51 @@ def _phash_components(rows: list[dict]) -> dict:
 def _validate_split_ratios(split_ratios: Mapping[str, float]) -> dict[str, float]:
     if set(split_ratios) != {"train", "val", "test"}:
         raise ValueError("split_ratios must contain train, val, and test")
-    normalized = {name: float(value) for name, value in split_ratios.items()}
+    normalized = {
+        name: float(split_ratios[name]) for name in ("train", "val", "test")
+    }
     if any(value <= 0.0 for value in normalized.values()):
         raise ValueError("split ratios must be positive")
     total = sum(normalized.values())
     if abs(total - 1.0) > 1e-9:
         raise ValueError("split ratios must sum to 1.0")
     return normalized
+
+
+def _integer_split_targets(
+    total: int,
+    ratios: Mapping[str, float],
+) -> dict[str, int]:
+    splits = tuple(ratios)
+    fractional = {split: total * ratios[split] for split in splits}
+    targets = {split: math.floor(fractional[split]) for split in splits}
+    leftovers = total - sum(targets.values())
+    split_order = {split: index for index, split in enumerate(splits)}
+    ranked = sorted(
+        splits,
+        key=lambda split: (
+            fractional[split] - math.floor(fractional[split]),
+            ratios[split],
+            -split_order[split],
+        ),
+        reverse=True,
+    )
+    for split in ranked[:leftovers]:
+        targets[split] += 1
+    if total >= len(splits):
+        for missing_split in (split for split in splits if targets[split] == 0):
+            donor = max(
+                (split for split in splits if targets[split] > 1),
+                key=lambda split: (
+                    targets[split] - fractional[split],
+                    targets[split],
+                    ratios[split],
+                    -split_order[split],
+                ),
+            )
+            targets[donor] -= 1
+            targets[missing_split] = 1
+    return targets
 
 
 def _assign_splits(
@@ -926,68 +965,131 @@ def _assign_splits(
         components[row["visual_component_id"]].append(row)
     if not rows:
         return
-    label_positive_totals = Counter()
-    for row in rows:
-        label_positive_totals.update(
-            tag for tag, value in zip(label_order, row["labels"]) if value == 1.0
-        )
-    rng = random.Random(seed)
-    tie_breakers = {component_id: rng.random() for component_id in sorted(components)}
-
-    def component_rarity(item: tuple[str, list[dict]]) -> tuple:
-        component_id, component_rows = item
-        positives = {
+    component_labels = {
+        component_id: {
             tag
             for row in component_rows
             for tag, value in zip(label_order, row["labels"])
             if value == 1.0
         }
+        for component_id, component_rows in components.items()
+    }
+    label_component_totals = Counter(
+        tag for labels in component_labels.values() for tag in labels
+    )
+    label_targets = {
+        tag: _integer_split_targets(total, ratios)
+        for tag, total in label_component_totals.items()
+    }
+    rng = random.Random(seed)
+    tie_breakers = {component_id: rng.random() for component_id in sorted(components)}
+
+    def component_rarity(item: tuple[str, list[dict]]) -> tuple:
+        component_id, component_rows = item
+        positives = component_labels[component_id]
         rarest = min(
-            (label_positive_totals[tag] for tag in positives),
+            (label_component_totals[tag] for tag in positives),
             default=len(rows) + 1,
         )
-        return (rarest, -len(component_rows), tie_breakers[component_id], component_id)
+        return (
+            rarest,
+            -len(positives),
+            -len(component_rows),
+            tie_breakers[component_id],
+            component_id,
+        )
 
     target_rows = {name: len(rows) * ratio for name, ratio in ratios.items()}
-    target_labels = {
-        tag: {
-            name: label_positive_totals[tag] * ratio for name, ratio in ratios.items()
-        }
-        for tag in label_positive_totals
+    max_component_size = max(
+        len(component_rows) for component_rows in components.values()
+    )
+    upper_rows = {
+        split: math.ceil(target_rows[split]) + max_component_size - 1
+        for split in ratios
     }
     assigned_rows = Counter()
-    assigned_labels = {tag: Counter() for tag in label_positive_totals}
+    assigned_label_components = {
+        tag: Counter() for tag in label_component_totals
+    }
     split_order = {"train": 0, "val": 1, "test": 2}
     for component_id, component_rows in sorted(
         components.items(), key=component_rarity
     ):
-        component_labels = Counter()
-        for row in component_rows:
-            component_labels.update(
-                tag for tag, value in zip(label_order, row["labels"]) if value == 1.0
+        positives = component_labels[component_id]
+        eligible_splits = [
+            split
+            for split in ratios
+            if assigned_rows[split] + len(component_rows) <= upper_rows[split]
+        ]
+        if not eligible_splits:
+            eligible_splits = list(ratios)
+
+        def split_score(split: str) -> tuple:
+            quota_need = sum(
+                assigned_label_components[tag][split] < label_targets[tag][split]
+                for tag in positives
             )
-        scores = {}
-        for split in ratios:
-            row_deficit = (target_rows[split] - assigned_rows[split]) / len(rows)
             label_deficit = sum(
-                (target_labels[tag][split] - assigned_labels[tag][split])
-                / max(label_positive_totals[tag], 1)
-                for tag in component_labels
+                max(
+                    label_targets[tag][split]
+                    - assigned_label_components[tag][split],
+                    0,
+                )
+                / max(label_targets[tag][split], 1)
+                for tag in positives
+                if label_targets[tag][split] > 0
             )
-            scores[split] = row_deficit + label_deficit
-        owner = max(
-            ratios,
-            key=lambda split: (
-                scores[split],
+            row_deficit = (
+                target_rows[split] - assigned_rows[split]
+            ) / max(target_rows[split], 1.0)
+            return (
+                quota_need,
+                label_deficit,
+                row_deficit,
                 ratios[split],
                 -split_order[split],
-            ),
+            )
+
+        owner = max(
+            eligible_splits,
+            key=split_score,
         )
         assigned_rows[owner] += len(component_rows)
-        for tag, count in component_labels.items():
-            assigned_labels[tag][owner] += count
+        for tag in positives:
+            assigned_label_components[tag][owner] += 1
         for row in component_rows:
             row["split"] = owner
+
+    missing_support = {
+        tag: [
+            split
+            for split in ratios
+            if assigned_label_components[tag][split] == 0
+        ]
+        for tag, total in label_component_totals.items()
+        if total >= len(ratios)
+        and any(assigned_label_components[tag][split] == 0 for split in ratios)
+    }
+    if missing_support:
+        raise RuntimeError(
+            "split stratification left evaluable labels without positive support: "
+            + json.dumps(missing_support, ensure_ascii=False, sort_keys=True)
+        )
+
+    allowed_row_error = max(math.ceil(len(rows) * 0.02), max_component_size)
+    ratio_errors = {
+        split: {
+            "actual": assigned_rows[split],
+            "target": target_rows[split],
+        }
+        for split in ratios
+        if abs(assigned_rows[split] - target_rows[split]) > allowed_row_error
+    }
+    if ratio_errors:
+        raise RuntimeError(
+            "component-level split ratios exceed tolerance: "
+            + json.dumps(ratio_errors, ensure_ascii=False, sort_keys=True)
+        )
 
 
 def _leakage_check(rows: Sequence[dict]) -> dict:
@@ -1028,26 +1130,49 @@ def _summary(
     seed: int,
 ) -> dict:
     per_label = {}
+    supervision_fields = ("pn_positive", "pn_negative", "pu_positive", "unknown")
     for index, tag in enumerate(schema["labels"]):
         counts = Counter()
+        split_counts = {
+            split: Counter() for split in ("train", "val", "test")
+        }
+        positive_components_by_split = {
+            split: set() for split in ("train", "val", "test")
+        }
         for row in rows:
             label = row["labels"][index]
             known = row["known_mask"][index]
             pu = row["pu_positive_mask"][index]
             if known:
-                counts["pn_positive" if label == 1.0 else "pn_negative"] += 1
+                field = "pn_positive" if label == 1.0 else "pn_negative"
             elif pu:
                 if label != 1.0:
                     raise RuntimeError("PU mask selected a non-positive label")
-                counts["pu_positive"] += 1
+                field = "pu_positive"
             else:
-                counts["unknown"] += 1
+                field = "unknown"
+            counts[field] += 1
+            split_counts[row["split"]][field] += 1
+            if label == 1.0:
+                positive_components_by_split[row["split"]].add(
+                    row["visual_component_id"]
+                )
+        component_counts = {
+            split: len(component_ids)
+            for split, component_ids in positive_components_by_split.items()
+        }
         per_label[tag] = {
             "training_mode": schema["label_training_modes"][tag],
-            "pn_positive": counts["pn_positive"],
-            "pn_negative": counts["pn_negative"],
-            "pu_positive": counts["pu_positive"],
-            "unknown": counts["unknown"],
+            **{field: counts[field] for field in supervision_fields},
+            "by_split": {
+                split: {
+                    field: split_counts[split][field]
+                    for field in supervision_fields
+                }
+                for split in ("train", "val", "test")
+            },
+            "positive_components": sum(component_counts.values()),
+            "positive_components_by_split": component_counts,
         }
     return {
         "schema_version": schema["schema_version"],

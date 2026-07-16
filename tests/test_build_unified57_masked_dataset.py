@@ -375,6 +375,80 @@ def test_train_val_test_have_no_visual_component_crossing():
     assert result["leakage_check"]["cross_split_components"] == []
 
 
+def _long_tail_stratification_rows():
+    rare_tags = ("H型", "立领", "合体", "前门襟", "插袋", "袖标")
+    tags = [tag for tag in rare_tags for _ in range(3)] + ["织带"] * 82
+    rows = []
+    for index, tag in enumerate(tags):
+        # Repeating one distinct byte eight times gives every two fixture
+        # pHashes a Hamming distance of at least 8, so all 100 rows are
+        # independent visual components.
+        phash_value = int.from_bytes(bytes([index]) * 8, "big")
+        rows.append(
+            _dictionary(
+                f"strat-{index:03d}",
+                tag,
+                _sha(f"strat-{index:03d}"),
+                _phash(phash_value),
+            )
+        )
+    return rows
+
+
+def test_long_tail_stratification_preserves_positive_support_and_global_ratios():
+    result = _build(dictionary=_long_tail_stratification_rows(), seed=20260717)
+    records = result["records"]
+    schema = builder.load_schema(SCHEMA_PATH)
+
+    component_positive_splits = {
+        tag: {
+            row["split"]
+            for row in records
+            if row["labels"][schema["labels"].index(tag)] == 1.0
+        }
+        for tag in schema["labels"]
+    }
+    component_positive_counts = {
+        tag: sum(
+            row["labels"][schema["labels"].index(tag)] == 1.0
+            for row in records
+        )
+        for tag in schema["labels"]
+    }
+    for tag, count in component_positive_counts.items():
+        if schema["label_training_modes"][tag] != "unsupported" and count >= 3:
+            assert component_positive_splits[tag] == {"train", "val", "test"}, tag
+
+    split_counts = {split: sum(row["split"] == split for row in records) for split in ("train", "val", "test")}
+    assert abs(split_counts["train"] / len(records) - 0.8) <= 0.02
+    assert abs(split_counts["val"] / len(records) - 0.1) <= 0.02
+    assert abs(split_counts["test"] / len(records) - 0.1) <= 0.02
+    assert result["leakage_check"]["passed"] is True
+    assert result["leakage_check"]["cross_split_components"] == []
+
+
+def test_summary_reports_each_labels_supervision_counts_by_split():
+    result = _build(dictionary=_long_tail_stratification_rows(), seed=20260717)
+
+    for tag, totals in result["summary"]["per_label"].items():
+        by_split = totals["by_split"]
+        assert set(by_split) == {"train", "val", "test"}
+        for field in ("pn_positive", "pn_negative", "pu_positive", "unknown"):
+            assert sum(by_split[split][field] for split in by_split) == totals[field], (
+                tag,
+                field,
+            )
+        assert set(totals["positive_components_by_split"]) == {
+            "train",
+            "val",
+            "test",
+        }
+        assert (
+            sum(totals["positive_components_by_split"].values())
+            == totals["positive_components"]
+        )
+
+
 def test_all_vectors_are_57_and_schema_hash_matches_rows():
     schema = builder.load_schema(SCHEMA_PATH)
     result = _build(
