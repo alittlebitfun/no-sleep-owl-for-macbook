@@ -28,7 +28,7 @@ context.imageInterpolation = .high
 NSColor.clear.setFill()
 let canvas = NSRect(x: 0, y: 0, width: canvasSize, height: canvasSize)
 canvas.fill()
-let iconScale: CGFloat = 0.80
+let iconScale: CGFloat = 0.88
 let iconSide = CGFloat(canvasSize) * iconScale
 let iconRect = NSRect(x: (CGFloat(canvasSize) - iconSide) / 2,
                       y: (CGFloat(canvasSize) - iconSide) / 2,
