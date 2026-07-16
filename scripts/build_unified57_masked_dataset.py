@@ -160,6 +160,7 @@ DEFAULT_SCHEMA_PATH = (
     / "bosideng_unified57_schema.json"
 )
 DEFAULT_SPLIT_RATIOS = {"train": 0.8, "val": 0.1, "test": 0.1}
+SPLIT_RATIO_TOLERANCE = 0.02
 PHASH_DISTANCE_THRESHOLD = 2
 
 EXPECTED_SAFE_GROUPS = {
@@ -1003,8 +1004,16 @@ def _assign_splits(
     max_component_size = max(
         len(component_rows) for component_rows in components.values()
     )
+    allowed_row_error = max(
+        math.ceil(len(rows) * SPLIT_RATIO_TOLERANCE),
+        max_component_size,
+    )
+    lower_rows = {
+        split: max(0, math.ceil(target_rows[split] - allowed_row_error))
+        for split in ratios
+    }
     upper_rows = {
-        split: math.ceil(target_rows[split]) + max_component_size - 1
+        split: math.floor(target_rows[split] + allowed_row_error)
         for split in ratios
     }
     assigned_rows = Counter()
@@ -1016,13 +1025,45 @@ def _assign_splits(
         components.items(), key=component_rarity
     ):
         positives = component_labels[component_id]
+        component_size = len(component_rows)
+        remaining_after_assignment = (
+            len(rows) - sum(assigned_rows.values()) - component_size
+        )
+
+        def preserves_ratio_bounds(split: str) -> bool:
+            if assigned_rows[split] + component_size > upper_rows[split]:
+                return False
+            required_for_lower_bounds = sum(
+                max(
+                    lower_rows[candidate]
+                    - assigned_rows[candidate]
+                    - (component_size if candidate == split else 0),
+                    0,
+                )
+                for candidate in ratios
+            )
+            return required_for_lower_bounds <= remaining_after_assignment
+
         eligible_splits = [
             split
             for split in ratios
-            if assigned_rows[split] + len(component_rows) <= upper_rows[split]
+            if preserves_ratio_bounds(split)
         ]
         if not eligible_splits:
-            eligible_splits = list(ratios)
+            raise RuntimeError(
+                "no split can accept visual component within ratio tolerance: "
+                + json.dumps(
+                    {
+                        "component_id": component_id,
+                        "component_size": component_size,
+                        "assigned_rows": dict(assigned_rows),
+                        "lower_rows": lower_rows,
+                        "upper_rows": upper_rows,
+                    },
+                    ensure_ascii=False,
+                    sort_keys=True,
+                )
+            )
 
         def split_score(split: str) -> tuple:
             quota_need = sum(
@@ -1054,7 +1095,7 @@ def _assign_splits(
             eligible_splits,
             key=split_score,
         )
-        assigned_rows[owner] += len(component_rows)
+        assigned_rows[owner] += component_size
         for tag in positives:
             assigned_label_components[tag][owner] += 1
         for row in component_rows:
@@ -1076,7 +1117,6 @@ def _assign_splits(
             + json.dumps(missing_support, ensure_ascii=False, sort_keys=True)
         )
 
-    allowed_row_error = max(math.ceil(len(rows) * 0.02), max_component_size)
     ratio_errors = {
         split: {
             "actual": assigned_rows[split],

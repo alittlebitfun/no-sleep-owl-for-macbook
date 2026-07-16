@@ -420,11 +420,57 @@ def test_long_tail_stratification_preserves_positive_support_and_global_ratios()
             assert component_positive_splits[tag] == {"train", "val", "test"}, tag
 
     split_counts = {split: sum(row["split"] == split for row in records) for split in ("train", "val", "test")}
-    assert abs(split_counts["train"] / len(records) - 0.8) <= 0.02
-    assert abs(split_counts["val"] / len(records) - 0.1) <= 0.02
-    assert abs(split_counts["test"] / len(records) - 0.1) <= 0.02
+    assert abs(split_counts["train"] - len(records) * 0.8) <= len(records) * 0.02
+    assert abs(split_counts["val"] - len(records) * 0.1) <= len(records) * 0.02
+    assert abs(split_counts["test"] - len(records) * 0.1) <= len(records) * 0.02
     assert result["leakage_check"]["passed"] is True
     assert result["leakage_check"]["cross_split_components"] == []
+
+
+def test_split_capacity_uses_ratio_tolerance_to_fit_ten_disjoint_long_tails():
+    rare_tags = (
+        "H型",
+        "立领",
+        "合体",
+        "长款",
+        "压胶门襟",
+        "前门襟",
+        "插袋",
+        "袖标",
+        "魔术贴",
+        "D字扣",
+    )
+    tags = [tag for tag in rare_tags for _ in range(3)] + ["织带"] * 70
+    rows = []
+    for index, tag in enumerate(tags):
+        phash_value = int.from_bytes(bytes([index]) * 8, "big")
+        rows.append(
+            _dictionary(
+                f"capacity-{index:03d}",
+                tag,
+                _sha(f"capacity-{index:03d}"),
+                _phash(phash_value),
+            )
+        )
+
+    result = _build(dictionary=rows, seed=20260717)
+    schema = builder.load_schema(SCHEMA_PATH)
+    split_counts = {
+        split: sum(row["split"] == split for row in result["records"])
+        for split in ("train", "val", "test")
+    }
+
+    assert 78 <= split_counts["train"] <= 82
+    assert 8 <= split_counts["val"] <= 12
+    assert 8 <= split_counts["test"] <= 12
+    for tag in (*rare_tags, "织带"):
+        tag_index = schema["labels"].index(tag)
+        assert {
+            row["split"]
+            for row in result["records"]
+            if row["labels"][tag_index] == 1.0
+        } == {"train", "val", "test"}
+    assert result["leakage_check"]["passed"] is True
 
 
 def test_summary_reports_each_labels_supervision_counts_by_split():
