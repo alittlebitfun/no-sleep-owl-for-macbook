@@ -44,33 +44,81 @@ def _write_jsonl(path: Path, rows: list[dict]) -> None:
 
 
 class PackageFixture:
-    def __init__(self, root: Path) -> None:
+    def __init__(
+        self,
+        root: Path,
+        *,
+        evaluation_status: str = "success",
+        one_by_one: bool = False,
+    ) -> None:
         self.root = root
         self.schema = json.loads(SCHEMA_PATH.read_text(encoding="utf-8"))
+        self.base_model = root / "base_model"
         self.checkpoint = root / "formal_v3.pt"
         self.thresholds = root / "thresholds.json"
         self.metrics = root / "evaluation_report.json"
+        self.test_manifest = root / "test.jsonl"
         self.predictions = root / "test_predictions_float32.jsonl"
         self.verification = root / "verification_input"
+        self.trainable_manifest = root / "expected_trainable_manifest.json"
+        self.candidate = root / "delivery.candidate"
         self.output = root / "delivery"
+        self.reproduced_float32 = root / "reproduced_32_float32.jsonl"
+        self.reproduced_selected = root / "reproduced_32_selected_only.jsonl"
+        self.reproduction_result = root / "reproduction_result.json"
+        self.evaluation_status = evaluation_status
+        self.one_by_one = one_by_one
         self.verification.mkdir()
+        self._write_base_model()
         self._write_checkpoint()
         self._write_thresholds()
         self._write_prediction_and_verification_rows()
         self._write_metrics()
 
+    def _write_base_model(self) -> None:
+        self.base_model.mkdir()
+        for name, content in {
+            "config.json": b'{"model_type":"qwen3_vl"}\n',
+            "model.safetensors.index.json": b'{"weight_map":{"x":"model-00001-of-00001.safetensors"}}\n',
+            "model-00001-of-00001.safetensors": b"synthetic-shard",
+            "preprocessor_config.json": b'{"size":336}\n',
+            "processor_config.json": b'{"processor":"qwen3_vl"}\n',
+            "tokenizer_config.json": b'{"model_max_length":32768}\n',
+            "tokenizer.json": b'{"version":"1.0"}\n',
+        }.items():
+            (self.base_model / name).write_bytes(content)
+
     def _write_checkpoint(self) -> None:
-        state = {
-            (
-                f"backbone.base_model.model.layers.{index:03d}."
-                "self_attn.q_proj.lora_A.default.weight"
-            ): torch.full((1, 1), float(index), dtype=torch.float32)
-            for index in range(288)
-        }
-        state["classifier.weight"] = torch.arange(57 * 3, dtype=torch.float32).reshape(
-            57, 3
-        )
+        state = {}
+        for index in range(144):
+            prefix = f"backbone.base_model.model.layers.{index:03d}.self_attn.q_proj"
+            shape_a = (1, 1) if self.one_by_one else (16, 32)
+            shape_b = (1, 1) if self.one_by_one else (32, 16)
+            state[f"{prefix}.lora_A.default.weight"] = torch.full(
+                shape_a, float(index), dtype=torch.float32
+            )
+            state[f"{prefix}.lora_B.default.weight"] = torch.full(
+                shape_b, float(index), dtype=torch.float32
+            )
+        hidden_size = 32
+        state["classifier.weight"] = torch.arange(
+            57 * hidden_size, dtype=torch.float32
+        ).reshape(57, hidden_size)
         state["classifier.bias"] = torch.arange(57, dtype=torch.float32)
+        _write_json(
+            self.trainable_manifest,
+            {
+                "version": "unified57_expected_trainable_v1",
+                "contract_kind": "synthetic_test",
+                "schema_sha256": self.schema["schema_sha256"],
+                "base_model_config_sha256": _sha256(self.base_model / "config.json"),
+                "lora_rank": 16,
+                "tensors": {
+                    name: {"shape": list(value.shape), "dtype": str(value.dtype)}
+                    for name, value in state.items()
+                },
+            },
+        )
         payload = {
             "format_version": 3,
             "tag_order": self.schema["labels"],
@@ -92,8 +140,8 @@ class PackageFixture:
                 "source_checkpoint_sha256": "2" * 64,
             },
             "run_contract": {
-                "base_model": "/models/Qwen3-VL-8B-Instruct",
-                "base_model_config_sha256": "3" * 64,
+                "base_model": str(self.base_model),
+                "base_model_config_sha256": _sha256(self.base_model / "config.json"),
                 "image_max_pixels": 112896,
                 "lora_rank": 16,
                 "lora_alpha": 32,
@@ -185,6 +233,7 @@ class PackageFixture:
                 }
             )
         _write_jsonl(self.predictions, float_rows)
+        _write_jsonl(self.test_manifest, float_rows)
         _write_jsonl(self.verification / "verification_32_manifest.jsonl", manifests)
         _write_jsonl(self.verification / "reference_32_float32.jsonl", float_rows)
         _write_jsonl(self.verification / "reference_32_selected_only.jsonl", selected)
@@ -193,37 +242,117 @@ class PackageFixture:
         _write_json(
             self.metrics,
             {
-                "status": "success",
+                "status": self.evaluation_status,
                 "provenance": {
                     "schema_sha256": self.schema["schema_sha256"],
                     "checkpoint_sha256": _sha256(self.checkpoint),
                     "thresholds_sha256": _sha256(self.thresholds),
                     "predictions_sha256": _sha256(self.predictions),
                     "validation_manifest_sha256": "4" * 64,
-                    "test_manifest_sha256": "5" * 64,
+                    "test_manifest_sha256": _sha256(self.test_manifest),
+                    "trainable_manifest_sha256": _sha256(self.trainable_manifest),
+                    "base_artifact_manifest_sha256": delivery.build_base_artifact_provenance(
+                        self.base_model
+                    )["manifest_sha256"],
                 },
                 "output_quality": {"json_validity_rate": 1.0},
-                "reproduction_32": {
-                    "records": 32,
-                    "score_values": 1824,
-                    "probabilities_exact": True,
-                    "max_abs_score_delta": 0.0,
-                    "selected_outputs_exact": True,
+                "timing": {"wall_seconds": 1.0},
+                "raw_thresholded": {},
+                "final_format": {},
+                "format_constraint_loss": {},
+                "representative_6": [
+                    {"record_id": f"rep:{index}"} for index in range(6)
+                ],
+                "process_cleanup": {"complete": True},
+                "environment": {
+                    "gpu": "synthetic",
+                    "cuda": "none",
+                    "pytorch": torch.__version__,
+                    "transformers": "4.57.1",
+                    "peft": "0.17.1",
+                    "safetensors": "0.7.0",
+                    "pillow": "12.1.1",
                 },
             },
         )
 
-    def build(self) -> dict:
-        return delivery.build_delivery_package(
+    def build_candidate(self) -> dict:
+        return delivery.build_delivery_candidate(
             checkpoint_path=self.checkpoint,
             schema_path=SCHEMA_PATH,
             thresholds_path=self.thresholds,
             metrics_path=self.metrics,
+            test_manifest_path=self.test_manifest,
             predictions_path=self.predictions,
             verification_dir=self.verification,
             final_prompt_path=FINAL_PROMPT_PATH,
+            expected_trainable_manifest_path=self.trainable_manifest,
+            base_model_path=self.base_model,
+            candidate_dir=self.candidate,
+            allow_synthetic_contract=True,
+        )
+
+    def write_reproduction_result(self) -> None:
+        float_rows = [
+            json.loads(line)
+            for line in (self.candidate / "verification" / "reference_32_float32.jsonl")
+            .read_text(encoding="utf-8")
+            .splitlines()
+        ]
+        selected_rows = [
+            json.loads(line)
+            for line in (
+                self.candidate / "verification" / "reference_32_selected_only.jsonl"
+            )
+            .read_text(encoding="utf-8")
+            .splitlines()
+        ]
+        image_sha = {row["record_id"]: row["image_sha256"] for row in float_rows}
+        for row in selected_rows:
+            row["image_sha256"] = image_sha[row["record_id"]]
+        _write_jsonl(self.reproduced_float32, float_rows)
+        _write_jsonl(self.reproduced_selected, selected_rows)
+        _write_json(
+            self.reproduction_result,
+            {
+                "candidate_weights_sha256": _sha256(
+                    self.candidate / "lora_and_classifier.safetensors"
+                ),
+                "candidate_model_config_sha256": _sha256(
+                    self.candidate / "model_config.json"
+                ),
+                "candidate_infer_sha256": _sha256(self.candidate / "infer.py"),
+                "reproduced_float32_path": str(self.reproduced_float32),
+                "reproduced_float32_sha256": _sha256(self.reproduced_float32),
+                "reproduced_selected_only_path": str(self.reproduced_selected),
+                "reproduced_selected_only_sha256": _sha256(self.reproduced_selected),
+                "commands": [
+                    f"python {self.candidate / 'infer.py'} --mode verification_float32",
+                    f"python {self.candidate / 'infer.py'} --mode selected_only",
+                ],
+                "environment": {
+                    "gpu": "synthetic",
+                    "cuda": "none",
+                    "pytorch": torch.__version__,
+                    "transformers": "4.57.1",
+                    "peft": "0.17.1",
+                    "safetensors": "0.7.0",
+                    "pillow": "12.1.1",
+                },
+            },
+        )
+
+    def seal(self) -> dict:
+        return delivery.seal_delivery_candidate(
+            candidate_dir=self.candidate,
+            reproduction_result_path=self.reproduction_result,
             output_dir=self.output,
         )
+
+    def build(self) -> dict:
+        self.build_candidate()
+        self.write_reproduction_result()
+        return self.seal()
 
 
 @pytest.fixture
@@ -231,6 +360,82 @@ def package(tmp_path: Path) -> PackageFixture:
     fixture = PackageFixture(tmp_path)
     fixture.build()
     return fixture
+
+
+def test_candidate_is_pending_and_partial_is_internal_only(tmp_path: Path) -> None:
+    fixture = PackageFixture(tmp_path, evaluation_status="partial")
+    fixture.build_candidate()
+    assert fixture.candidate.is_dir()
+    assert not (fixture.candidate / "SHA256SUMS").exists()
+    pending = json.loads(
+        (fixture.candidate / "VERIFICATION.json").read_text(encoding="utf-8")
+    )
+    assert pending["status"] == "pending_reproduction"
+    assert pending["evaluation_status"] == "partial"
+    assert pending["customer_ready"] is False
+
+    fixture.write_reproduction_result()
+    fixture.seal()
+    sealed = json.loads((fixture.output / "VERIFICATION.json").read_text())
+    assert sealed["status"] == "partial"
+    assert sealed["customer_ready"] is False
+    assert sealed["internal_use_only"] is True
+
+
+def test_seal_binds_exact_candidate_outputs_and_rejects_score_drift(
+    tmp_path: Path,
+) -> None:
+    fixture = PackageFixture(tmp_path)
+    fixture.build_candidate()
+    fixture.write_reproduction_result()
+    rows = [
+        json.loads(line)
+        for line in fixture.reproduced_float32.read_text(encoding="utf-8").splitlines()
+    ]
+    rows[0]["scores"][0] += 0.01
+    _write_jsonl(fixture.reproduced_float32, rows)
+    result = json.loads(fixture.reproduction_result.read_text(encoding="utf-8"))
+    result["reproduced_float32_sha256"] = _sha256(fixture.reproduced_float32)
+    _write_json(fixture.reproduction_result, result)
+    with pytest.raises(ValueError, match="1824|score|probabil"):
+        fixture.seal()
+    assert not fixture.output.exists()
+
+
+def test_one_by_one_lora_fails_independent_shape_contract(tmp_path: Path) -> None:
+    fixture = PackageFixture(tmp_path, one_by_one=True)
+    with pytest.raises(ValueError, match="LoRA.*rank|shape"):
+        fixture.build_candidate()
+
+
+def test_candidate_rejects_failed_metrics_and_incomplete_test_coverage(
+    tmp_path: Path,
+) -> None:
+    failed_root = tmp_path / "failed"
+    failed_root.mkdir()
+    failed = PackageFixture(failed_root)
+    metrics = json.loads(failed.metrics.read_text(encoding="utf-8"))
+    metrics["status"] = "fail"
+    _write_json(failed.metrics, metrics)
+    with pytest.raises(ValueError, match="success or partial"):
+        failed.build_candidate()
+
+    incomplete_root = tmp_path / "incomplete"
+    incomplete_root.mkdir()
+    incomplete = PackageFixture(incomplete_root)
+    rows = incomplete.predictions.read_text(encoding="utf-8").splitlines()
+    incomplete.predictions.write_text("\n".join(rows[:-1]) + "\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="exactly cover"):
+        incomplete.build_candidate()
+
+    circular_root = tmp_path / "circular"
+    circular_root.mkdir()
+    circular = PackageFixture(circular_root)
+    metrics = json.loads(circular.metrics.read_text(encoding="utf-8"))
+    metrics["reproduction_32"] = {"probabilities_exact": True}
+    _write_json(circular.metrics, metrics)
+    with pytest.raises(ValueError, match="cannot predeclare reproduction_32"):
+        circular.build_candidate()
 
 
 def test_builds_lightweight_split_safetensors_package(package: PackageFixture) -> None:
@@ -265,7 +470,7 @@ def test_builds_lightweight_split_safetensors_package(package: PackageFixture) -
         "classifier.weight",
         "classifier.bias",
     }
-    assert weights["classifier.weight"].shape == (57, 3)
+    assert weights["classifier.weight"].shape == (57, 32)
     assert weights["classifier.bias"].shape == (57,)
 
     config = json.loads(
@@ -377,6 +582,9 @@ def test_checksums_and_verification32_references_are_complete(
     verification = json.loads(
         (package.output / "VERIFICATION.json").read_text(encoding="utf-8")
     )
+    assert verification["status"] == "success"
+    assert verification["customer_ready"] is True
+    assert verification["internal_use_only"] is False
     assert verification["records"] == 32
     assert verification["score_values"] == 1824
     assert verification["probabilities_exact"] is True
@@ -429,6 +637,9 @@ def test_generated_infer_exposes_all_three_modes_without_loading_base(
         scores, "selected_with_confidence", config, thresholds
     )
     all_scores = infer.format_scores(scores, "all_scores", config, thresholds)
+    parsed = infer.parse_args(
+        ["--scores-json", str(package.root / "scores.json"), "--mode", "all-scores"]
+    )
     assert selected == {
         "局部结构": [],
         "廓形": ["H型"],
@@ -437,6 +648,7 @@ def test_generated_infer_exposes_all_three_modes_without_loading_base(
     }
     assert confidence["廓形"] == [{"name": "H型", "confidence": "0.91"}]
     assert all_scores["scores"]["假两件"] == "0.00"
+    assert parsed.mode == "all_scores"
 
 
 def test_generated_decode_and_single_weights_contract(

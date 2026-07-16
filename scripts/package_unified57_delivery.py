@@ -64,6 +64,81 @@ def sha256_file(path: Path | str) -> str:
     return digest.hexdigest()
 
 
+def _canonical_sha256(payload: object) -> str:
+    return hashlib.sha256(
+        json.dumps(
+            payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+        ).encode("utf-8")
+    ).hexdigest()
+
+
+def build_base_artifact_provenance(base_model_path: Path | str) -> dict[str, Any]:
+    """Hash the external base config, weight index/shards, processor, and tokenizer."""
+    root = Path(base_model_path)
+    if not root.is_dir():
+        raise ValueError(f"base model directory is unavailable: {root}")
+    config = root / "config.json"
+    if not config.is_file():
+        raise ValueError("base model config.json is required")
+    candidates: set[Path] = {config}
+    indexes = sorted(root.glob("*.safetensors.index.json"))
+    if indexes:
+        candidates.update(indexes)
+        for index_path in indexes:
+            index = _load_json(index_path, name="base model weight index")
+            weight_map = index.get("weight_map")
+            if not isinstance(weight_map, Mapping) or not weight_map:
+                raise ValueError("base model weight index needs a non-empty weight_map")
+            for relative in set(weight_map.values()):
+                shard = root / str(relative)
+                if not shard.is_file():
+                    raise ValueError(f"base model shard is missing: {relative}")
+                candidates.add(shard)
+    else:
+        shards = sorted(root.glob("*.safetensors"))
+        if not shards:
+            raise ValueError("base model weight index or safetensors shard is required")
+        candidates.update(shards)
+    processor_files = sorted(
+        path
+        for pattern in ("*processor*.json", "preprocessor_config.json")
+        for path in root.glob(pattern)
+        if path.is_file()
+    )
+    tokenizer_files = sorted(
+        path
+        for pattern in ("tokenizer*", "vocab*", "merges.txt")
+        for path in root.glob(pattern)
+        if path.is_file()
+    )
+    if not processor_files or not tokenizer_files:
+        raise ValueError("base model processor and tokenizer artifacts are required")
+    candidates.update(processor_files)
+    candidates.update(tokenizer_files)
+    files = []
+    for path in sorted(candidates, key=lambda item: item.relative_to(root).as_posix()):
+        relative = path.relative_to(root).as_posix()
+        role = (
+            "config"
+            if relative == "config.json"
+            else "weights"
+            if "safetensors" in relative
+            else "processor"
+            if "processor" in relative
+            else "tokenizer"
+        )
+        files.append(
+            {
+                "path": relative,
+                "role": role,
+                "size": path.stat().st_size,
+                "sha256": sha256_file(path),
+            }
+        )
+    payload = {"version": "unified57_base_artifacts_v1", "files": files}
+    return {**payload, "manifest_sha256": _canonical_sha256(payload)}
+
+
 def _write_json(path: Path, payload: object) -> None:
     path.write_text(
         json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
@@ -300,24 +375,35 @@ def _validate_schema(path: Path) -> tuple[dict[str, Any], str]:
     return schema, file_sha256
 
 
-class _TrainableStateCarrier(nn.Module):
-    """Tiny parameter carrier that lets the training loader validate/export state."""
+class _ExpectedTrainableModel(nn.Module):
+    """Independent model-shaped contract used by the authoritative v3 loader."""
 
-    def __init__(self, state: Mapping[str, object]) -> None:
+    def __init__(self, tensor_specs: Mapping[str, Mapping[str, Any]]) -> None:
         super().__init__()
         self._external_names: list[str] = []
         self._slot_names: list[str] = []
-        for index, (name, value) in enumerate(state.items()):
-            if not isinstance(name, str) or not torch.is_tensor(value):
-                raise ValueError("checkpoint model state must map names to tensors")
-            if not value.is_floating_point():
-                raise ValueError(
-                    f"checkpoint trainable tensor {name} must be floating point"
-                )
+        dtype_map = {
+            "torch.float32": torch.float32,
+            "torch.bfloat16": torch.bfloat16,
+            "torch.float16": torch.float16,
+        }
+        for index, (name, spec) in enumerate(tensor_specs.items()):
+            shape = spec.get("shape")
+            dtype = dtype_map.get(spec.get("dtype"))
+            if (
+                not isinstance(name, str)
+                or not isinstance(shape, list)
+                or not shape
+                or any(not isinstance(size, int) or size <= 0 for size in shape)
+                or dtype is None
+            ):
+                raise ValueError(f"invalid expected trainable tensor spec for {name!r}")
             slot = f"slot_{index:04d}"
             self.register_parameter(
                 slot,
-                nn.Parameter(torch.empty_like(value, device="cpu"), requires_grad=True),
+                nn.Parameter(
+                    torch.empty(tuple(shape), dtype=dtype), requires_grad=True
+                ),
             )
             self._external_names.append(name)
             self._slot_names.append(slot)
@@ -333,11 +419,80 @@ class _TrainableStateCarrier(nn.Module):
             yield external_name, getattr(self, slot_name)
 
 
+def _validate_expected_trainable_manifest(
+    path: Path,
+    *,
+    schema: Mapping[str, Any],
+    base_config_sha256: str,
+    allow_synthetic_contract: bool,
+) -> tuple[dict[str, Any], str]:
+    payload = _load_json(path, name="expected trainable manifest")
+    _require_equal(
+        payload.get("version"),
+        "unified57_expected_trainable_v1",
+        name="expected trainable manifest version",
+    )
+    _require_equal(
+        payload.get("schema_sha256"),
+        schema["schema_sha256"],
+        name="expected trainable schema_sha256",
+    )
+    _require_equal(
+        payload.get("base_model_config_sha256"),
+        base_config_sha256,
+        name="expected trainable base config SHA256",
+    )
+    _require_equal(payload.get("lora_rank"), 16, name="expected LoRA rank")
+    if (
+        payload.get("contract_kind") == "synthetic_test"
+        and not allow_synthetic_contract
+    ):
+        raise ValueError("synthetic trainable contracts are disabled for production")
+    tensors = payload.get("tensors")
+    if not isinstance(tensors, Mapping) or len(tensors) != 290:
+        raise ValueError("expected trainable manifest must contain exactly 290 tensors")
+    lora = {name: spec for name, spec in tensors.items() if "lora_" in name}
+    if len(lora) != 288:
+        raise ValueError("expected trainable manifest must contain 288 LoRA tensors")
+    if (
+        sum("lora_A" in name for name in lora) != 144
+        or sum("lora_B" in name for name in lora) != 144
+    ):
+        raise ValueError("expected LoRA names must contain 144 A and 144 B tensors")
+    for name, spec in lora.items():
+        shape = spec.get("shape") if isinstance(spec, Mapping) else None
+        if (
+            not isinstance(shape, list)
+            or len(shape) != 2
+            or 16 not in shape
+            or max(shape) <= 16
+        ):
+            raise ValueError(f"LoRA rank/shape contract failed for {name}")
+    weight = tensors.get("classifier.weight")
+    bias = tensors.get("classifier.bias")
+    if not isinstance(weight, Mapping) or not isinstance(bias, Mapping):
+        raise ValueError("expected classifier tensor specs are required")
+    weight_shape = weight.get("shape")
+    if (
+        not isinstance(weight_shape, list)
+        or len(weight_shape) != 2
+        or weight_shape[0] != 57
+        or weight_shape[1] <= 16
+    ):
+        raise ValueError("expected classifier.weight shape must be [57, hidden_size]")
+    if bias.get("shape") != [57]:
+        raise ValueError("expected classifier.bias shape must be [57]")
+    if not allow_synthetic_contract and weight_shape[1] != 4096:
+        raise ValueError("production Unified57 classifier hidden_size must be 4096")
+    return payload, sha256_file(path)
+
+
 def _load_checkpoint_state(
     checkpoint_path: Path,
     *,
     schema: Mapping[str, Any],
     expected_checkpoint_sha256: str,
+    expected_trainable_manifest: Mapping[str, Any],
 ) -> tuple[dict[str, Any], dict[str, torch.Tensor], str]:
     checkpoint_sha256 = sha256_file(checkpoint_path)
     _require_equal(
@@ -354,6 +509,21 @@ def _load_checkpoint_state(
     state = raw.get("model")
     if not isinstance(state, Mapping):
         raise ValueError("v3 checkpoint model mapping is missing")
+    expected_specs = expected_trainable_manifest["tensors"]
+    if set(state) != set(expected_specs):
+        raise ValueError(
+            "checkpoint trainable names differ from authoritative manifest"
+        )
+    for name, spec in expected_specs.items():
+        value = state[name]
+        if not torch.is_tensor(value) or list(value.shape) != spec["shape"]:
+            raise ValueError(
+                f"checkpoint tensor shape differs from manifest for {name}"
+            )
+        if str(value.dtype) != spec["dtype"]:
+            raise ValueError(
+                f"checkpoint tensor dtype differs from manifest for {name}"
+            )
 
     _require_equal(raw.get("format_version"), 3, name="checkpoint format_version")
     _require_equal(raw.get("tag_order"), schema["labels"], name="checkpoint tag_order")
@@ -419,7 +589,7 @@ def _load_checkpoint_state(
         name="checkpoint base_model_config_sha256",
     )
 
-    carrier = _TrainableStateCarrier(state)
+    carrier = _ExpectedTrainableModel(expected_trainable_manifest["tensors"])
     loaded_payload = load_v3_model_state_for_inference(
         checkpoint_path,
         model=carrier,
@@ -510,13 +680,40 @@ def _validate_thresholds(
     return payload, sha256_file(path), resolved
 
 
+def _validate_test_manifest(
+    path: Path, *, schema: Mapping[str, Any]
+) -> tuple[list[dict[str, Any]], str]:
+    rows = _load_jsonl(path, name="test manifest")
+    ids: list[str] = []
+    for index, row in enumerate(rows):
+        record_id = row.get("record_id")
+        if not isinstance(record_id, str) or not record_id:
+            raise ValueError(f"test manifest row {index} lacks record_id")
+        ids.append(record_id)
+        _require_equal(
+            row.get("schema_sha256"),
+            schema["schema_sha256"],
+            name=f"test manifest {record_id} schema_sha256",
+        )
+    if len(ids) != len(set(ids)):
+        raise ValueError("test manifest record_id values must be unique")
+    return rows, sha256_file(path)
+
+
 def _validate_predictions(
     path: Path,
     *,
     schema: Mapping[str, Any],
     checkpoint_sha256: str,
+    test_manifest_rows: Sequence[Mapping[str, Any]],
 ) -> tuple[list[dict[str, Any]], str]:
     rows = _load_jsonl(path, name="test predictions")
+    expected_ids = [row.get("record_id") for row in test_manifest_rows]
+    actual_ids = [row.get("record_id") for row in rows]
+    if actual_ids != expected_ids:
+        raise ValueError(
+            "test predictions must exactly cover the test manifest in manifest order"
+        )
     seen: set[str] = set()
     for index, row in enumerate(rows):
         record_id = row.get("record_id")
@@ -575,9 +772,15 @@ def _validate_metrics(
     thresholds_sha256: str,
     predictions_sha256: str,
     validation_manifest_sha256: str,
+    test_manifest_sha256: str,
+    trainable_manifest_sha256: str,
+    base_artifact_manifest_sha256: str,
 ) -> tuple[dict[str, Any], str]:
     payload = _load_json(path, name="evaluation metrics")
-    _require_equal(payload.get("status"), "success", name="evaluation status")
+    if payload.get("status") not in {"success", "partial"}:
+        raise ValueError(
+            "evaluation status must be success or partial; fail is rejected"
+        )
     provenance = payload.get("provenance")
     if not isinstance(provenance, Mapping):
         raise ValueError("evaluation metrics provenance is required")
@@ -587,32 +790,50 @@ def _validate_metrics(
         "thresholds_sha256": thresholds_sha256,
         "predictions_sha256": predictions_sha256,
         "validation_manifest_sha256": validation_manifest_sha256,
+        "test_manifest_sha256": test_manifest_sha256,
+        "trainable_manifest_sha256": trainable_manifest_sha256,
+        "base_artifact_manifest_sha256": base_artifact_manifest_sha256,
     }
     for key, value in expected.items():
         _require_equal(provenance.get(key), value, name=f"evaluation {key}")
-    _require_sha256(
-        provenance.get("test_manifest_sha256"), name="evaluation test_manifest_sha256"
-    )
-    output_quality = payload.get("output_quality")
-    if (
-        not isinstance(output_quality, Mapping)
-        or output_quality.get("json_validity_rate") != 1.0
+    for section in (
+        "timing",
+        "raw_thresholded",
+        "final_format",
+        "format_constraint_loss",
+        "output_quality",
+        "representative_6",
+        "process_cleanup",
     ):
-        raise ValueError("evaluation JSON validity must be exactly 100%")
-    reproduction = payload.get("reproduction_32")
-    if not isinstance(reproduction, Mapping):
-        raise ValueError("evaluation reproduction_32 gate is required")
-    gates = {
-        "records": 32,
-        "score_values": 1824,
-        "probabilities_exact": True,
-        "max_abs_score_delta": 0.0,
-        "selected_outputs_exact": True,
-    }
-    for key, expected_value in gates.items():
-        _require_equal(
-            reproduction.get(key), expected_value, name=f"reproduction_32 {key}"
-        )
+        if section not in payload:
+            raise ValueError(f"evaluation metrics section {section} is required")
+    output_quality = payload.get("output_quality")
+    if not isinstance(output_quality, Mapping):
+        raise ValueError("evaluation output_quality must be an object")
+    if (
+        payload["status"] == "success"
+        and output_quality.get("json_validity_rate") != 1.0
+    ):
+        raise ValueError("successful evaluation JSON validity must be exactly 100%")
+    if (
+        not isinstance(payload["representative_6"], list)
+        or len(payload["representative_6"]) != 6
+    ):
+        raise ValueError("evaluation representative_6 must contain exactly six records")
+    cleanup = payload["process_cleanup"]
+    if not isinstance(cleanup, Mapping):
+        raise ValueError("evaluation process_cleanup must be an object")
+    if payload["status"] == "success" and cleanup.get("complete") is not True:
+        raise ValueError("successful evaluation requires complete process cleanup")
+    if "reproduction_32" in payload:
+        reproduction = payload["reproduction_32"]
+        if not isinstance(reproduction, Mapping) or reproduction.get("status") not in {
+            "pending",
+            "pending_reproduction",
+        }:
+            raise ValueError(
+                "candidate evaluation metrics cannot predeclare reproduction_32 exactness"
+            )
     return payload, sha256_file(path)
 
 
@@ -731,10 +952,21 @@ def _validate_verification_references(
     }
 
 
-def _requirements_text() -> str:
-    return (
-        """torch>=2.6\ntransformers>=4.57\npeft>=0.17\nsafetensors>=0.5\nPillow>=11\n"""
-    )
+def _requirements_text(environment: Mapping[str, Any]) -> str:
+    names = {
+        "pytorch": "torch",
+        "transformers": "transformers",
+        "peft": "peft",
+        "safetensors": "safetensors",
+        "pillow": "Pillow",
+    }
+    lines = []
+    for source, package in names.items():
+        version = environment.get(source)
+        if not isinstance(version, str) or not version:
+            raise ValueError(f"evaluation environment must pin {source} version")
+        lines.append(f"{package}=={version}")
+    return "\n".join(lines) + "\n"
 
 
 def _readme_text(config: Mapping[str, Any]) -> str:
@@ -812,6 +1044,15 @@ def load_json(path):
     if not isinstance(value, dict):
         raise ValueError(f"{path} must contain a JSON object")
     return value
+
+
+def load_jsonl(path):
+    rows = []
+    with Path(path).open(encoding="utf-8") as handle:
+        for line in handle:
+            if line.strip():
+                rows.append(json.loads(line))
+    return rows
 
 
 def _threshold_map(payload, config):
@@ -963,6 +1204,10 @@ def build_model(base_model, config, device):
             )
         if sha256_file(base_config_path) != expected_base_config_sha:
             raise ValueError("base-model config.json SHA256 mismatch")
+    for artifact in config["base_model"]["artifact_manifest"]["files"]:
+        artifact_path = Path(base_model) / artifact["path"]
+        if not artifact_path.is_file() or sha256_file(artifact_path) != artifact["sha256"]:
+            raise ValueError(f"base-model artifact mismatch: {artifact['path']}")
     backbone = AutoModelForImageTextToText.from_pretrained(
         base_model,
         torch_dtype=torch.bfloat16,
@@ -1037,6 +1282,7 @@ def parse_args(argv=None):
     parser = argparse.ArgumentParser()
     parser.add_argument("--base-model")
     parser.add_argument("--image", action="append", type=Path)
+    parser.add_argument("--verification-manifest", type=Path)
     parser.add_argument("--output", type=Path)
     parser.add_argument("--batch-size", type=int, default=1)
     parser.add_argument("--device", default="cuda:0")
@@ -1047,6 +1293,10 @@ def parse_args(argv=None):
             "selected_with_confidence",
             "all_scores",
             "verification_float32",
+            "selected-only",
+            "selected-with-confidence",
+            "all-scores",
+            "verification-float32",
         ),
         default="selected_only",
     )
@@ -1056,8 +1306,15 @@ def parse_args(argv=None):
         help="Format a JSON 57-score vector without loading the base model.",
     )
     args = parser.parse_args(argv)
-    if args.scores_json is None and (not args.base_model or not args.image):
-        parser.error("--base-model and --image are required for model inference")
+    args.mode = args.mode.replace("-", "_")
+    if args.scores_json is None and (
+        not args.base_model or not (args.image or args.verification_manifest)
+    ):
+        parser.error(
+            "--base-model and either --image or --verification-manifest are required"
+        )
+    if args.image and args.verification_manifest:
+        parser.error("--image and --verification-manifest are mutually exclusive")
     if args.batch_size <= 0:
         parser.error("--batch-size must be positive")
     return args
@@ -1079,7 +1336,20 @@ def main(argv=None):
 
         if args.device.startswith("cuda") and not torch.cuda.is_available():
             raise RuntimeError("CUDA device requested but CUDA is unavailable")
-        paths = collect_images(args.image)
+        manifest_rows = (
+            load_jsonl(args.verification_manifest)
+            if args.verification_manifest
+            else None
+        )
+        paths = (
+            [Path(row["image_path"]) for row in manifest_rows]
+            if manifest_rows is not None
+            else collect_images(args.image)
+        )
+        if manifest_rows is not None:
+            for row, path in zip(manifest_rows, paths):
+                if sha256_file(path) != row["image_sha256"]:
+                    raise ValueError(f"image SHA256 mismatch for {row['record_id']}")
         device = torch.device(args.device)
         processor = AutoProcessor.from_pretrained(args.base_model, trust_remote_code=True)
         model = build_model(args.base_model, config, device)
@@ -1103,14 +1373,25 @@ def main(argv=None):
                 enabled=device.type == "cuda",
             ):
                 logits = model(**inputs)
-            for path, scores in zip(path_batch, torch.sigmoid(logits.float()).cpu().tolist()):
-                rows.append(
-                    {
-                        "image": str(path),
-                        "output": format_scores(scores, args.mode, config, thresholds),
-                    }
-                )
-        if len(rows) == 1:
+            for batch_offset, (path, scores) in enumerate(
+                zip(path_batch, torch.sigmoid(logits.float()).cpu().tolist())
+            ):
+                formatted = format_scores(scores, args.mode, config, thresholds)
+                if manifest_rows is None:
+                    rows.append({"image": str(path), "output": formatted})
+                    continue
+                metadata = manifest_rows[start + batch_offset]
+                row = {
+                    "record_id": metadata["record_id"],
+                    "image_path": str(path),
+                    "image_sha256": metadata["image_sha256"],
+                }
+                if args.mode == "verification_float32":
+                    row["scores"] = formatted["scores"]
+                else:
+                    row["output"] = formatted
+                rows.append(row)
+        if len(rows) == 1 and manifest_rows is None:
             text = json.dumps(rows[0]["output"], ensure_ascii=False, indent=2) + "\n"
         else:
             text = "".join(json.dumps(row, ensure_ascii=False) + "\n" for row in rows)
@@ -1199,32 +1480,53 @@ def _write_checksums(package_dir: Path) -> None:
     )
 
 
-def build_delivery_package(
+def build_delivery_candidate(
     *,
     checkpoint_path: Path | str,
     schema_path: Path | str,
     thresholds_path: Path | str,
     metrics_path: Path | str,
+    test_manifest_path: Path | str,
     predictions_path: Path | str,
     verification_dir: Path | str,
     final_prompt_path: Path | str,
-    output_dir: Path | str,
+    expected_trainable_manifest_path: Path | str,
+    base_model_path: Path | str,
+    candidate_dir: Path | str,
+    allow_synthetic_contract: bool = False,
 ) -> dict[str, Any]:
-    """Validate all frozen inputs and atomically create the lightweight package."""
+    """Build an explicitly pending candidate; no customer-ready claim is made."""
     checkpoint_path = Path(checkpoint_path)
     schema_path = Path(schema_path)
     thresholds_path = Path(thresholds_path)
     metrics_path = Path(metrics_path)
+    test_manifest_path = Path(test_manifest_path)
     predictions_path = Path(predictions_path)
     verification_dir = Path(verification_dir)
     final_prompt_path = Path(final_prompt_path)
-    output_dir = Path(output_dir)
-    if output_dir.exists():
-        raise FileExistsError(f"output directory already exists: {output_dir}")
+    expected_trainable_manifest_path = Path(expected_trainable_manifest_path)
+    base_model_path = Path(base_model_path)
+    candidate_dir = Path(candidate_dir)
+    if candidate_dir.exists():
+        raise FileExistsError(f"candidate directory already exists: {candidate_dir}")
 
     schema, schema_file_sha256 = _validate_schema(schema_path)
     prompt_sha256 = sha256_file(final_prompt_path)
     _require_equal(prompt_sha256, FINAL_PROMPT_SHA256, name="final prompt SHA256")
+    base_artifacts = build_base_artifact_provenance(base_model_path)
+    base_config_sha256 = next(
+        item["sha256"]
+        for item in base_artifacts["files"]
+        if item["path"] == "config.json"
+    )
+    expected_trainable, trainable_manifest_sha256 = (
+        _validate_expected_trainable_manifest(
+            expected_trainable_manifest_path,
+            schema=schema,
+            base_config_sha256=base_config_sha256,
+            allow_synthetic_contract=allow_synthetic_contract,
+        )
+    )
     threshold_preview = _load_json(thresholds_path, name="thresholds")
     declared_checkpoint_sha256 = _require_sha256(
         threshold_preview.get("checkpoint_sha256"),
@@ -1234,16 +1536,31 @@ def build_delivery_package(
         checkpoint_path,
         schema=schema,
         expected_checkpoint_sha256=declared_checkpoint_sha256,
+        expected_trainable_manifest=expected_trainable,
+    )
+    _require_equal(
+        checkpoint["run_contract"]["base_model"],
+        str(base_model_path),
+        name="checkpoint base_model path",
+    )
+    _require_equal(
+        checkpoint["run_contract"]["base_model_config_sha256"],
+        base_config_sha256,
+        name="checkpoint base model config SHA256",
     )
     thresholds_payload, thresholds_sha256, threshold_values = _validate_thresholds(
         thresholds_path,
         schema=schema,
         checkpoint_sha256=checkpoint_sha256,
     )
+    test_manifest_rows, test_manifest_sha256 = _validate_test_manifest(
+        test_manifest_path, schema=schema
+    )
     predictions, predictions_sha256 = _validate_predictions(
         predictions_path,
         schema=schema,
         checkpoint_sha256=checkpoint_sha256,
+        test_manifest_rows=test_manifest_rows,
     )
     metrics, metrics_sha256 = _validate_metrics(
         metrics_path,
@@ -1252,6 +1569,9 @@ def build_delivery_package(
         thresholds_sha256=thresholds_sha256,
         predictions_sha256=predictions_sha256,
         validation_manifest_sha256=thresholds_payload["validation_manifest_sha256"],
+        test_manifest_sha256=test_manifest_sha256,
+        trainable_manifest_sha256=trainable_manifest_sha256,
+        base_artifact_manifest_sha256=base_artifacts["manifest_sha256"],
     )
     verification = _validate_verification_references(
         verification_dir,
@@ -1261,9 +1581,9 @@ def build_delivery_package(
         predictions=predictions,
     )
 
-    output_dir.parent.mkdir(parents=True, exist_ok=True)
+    candidate_dir.parent.mkdir(parents=True, exist_ok=True)
     temporary = Path(
-        tempfile.mkdtemp(prefix=f".{output_dir.name}.", dir=output_dir.parent)
+        tempfile.mkdtemp(prefix=f".{candidate_dir.name}.", dir=candidate_dir.parent)
     )
     try:
         lora = {name: value for name, value in state.items() if "lora_" in name}
@@ -1285,7 +1605,7 @@ def build_delivery_package(
             DECODE_TEST_SOURCE, encoding="utf-8"
         )
         (temporary / "requirements.txt").write_text(
-            _requirements_text(), encoding="utf-8"
+            _requirements_text(metrics.get("environment") or {}), encoding="utf-8"
         )
         target_verification = temporary / "verification"
         target_verification.mkdir()
@@ -1297,9 +1617,10 @@ def build_delivery_package(
         config: dict[str, Any] = {
             "package_version": PACKAGE_VERSION,
             "base_model": {
-                "identifier": run_contract["base_model"],
-                "config_sha256": run_contract.get("base_model_config_sha256"),
-                "processor_identifier": run_contract["base_model"],
+                "identifier": str(base_model_path),
+                "config_sha256": base_config_sha256,
+                "processor_identifier": str(base_model_path),
+                "artifact_manifest": base_artifacts,
                 "included": False,
             },
             "checkpoint": {
@@ -1361,6 +1682,8 @@ def build_delivery_package(
                 "predictions_sha256": predictions_sha256,
                 "test_manifest_sha256": metrics["provenance"]["test_manifest_sha256"],
                 "status": metrics["status"],
+                "trainable_manifest_sha256": trainable_manifest_sha256,
+                "base_artifact_manifest_sha256": base_artifacts["manifest_sha256"],
             },
             "output_modes": {
                 "default": "selected_only",
@@ -1374,12 +1697,10 @@ def build_delivery_package(
         }
         _write_json(temporary / "model_config.json", config)
         verification_payload = {
-            "status": "success",
-            "records": 32,
-            "score_values": 1824,
-            "probabilities_exact": True,
-            "max_abs_score_delta": 0.0,
-            "selected_outputs_exact": True,
+            "status": "pending_reproduction",
+            "evaluation_status": metrics["status"],
+            "customer_ready": False,
+            "internal_use_only": True,
             "provenance": {
                 "checkpoint_sha256": checkpoint_sha256,
                 "schema_sha256": schema["schema_sha256"],
@@ -1388,6 +1709,9 @@ def build_delivery_package(
                 "final_prompt_sha256": prompt_sha256,
                 "weights_sha256": weights_sha256,
                 "metrics_sha256": metrics_sha256,
+                "test_manifest_sha256": test_manifest_sha256,
+                "trainable_manifest_sha256": trainable_manifest_sha256,
+                "base_artifact_manifest_sha256": base_artifacts["manifest_sha256"],
             },
             "references": {
                 "predictions_sha256": predictions_sha256,
@@ -1395,16 +1719,24 @@ def build_delivery_package(
             },
             "environment": metrics.get("environment", {}),
             "external_images_required": True,
+            "timing": metrics["timing"],
+            "raw_thresholded": metrics["raw_thresholded"],
+            "final_format": metrics["final_format"],
+            "format_constraint_loss": metrics["format_constraint_loss"],
+            "output_quality": metrics["output_quality"],
+            "representative_6": metrics["representative_6"],
+            "process_cleanup": metrics["process_cleanup"],
         }
         _write_json(temporary / "VERIFICATION.json", verification_payload)
         (temporary / "README.md").write_text(_readme_text(config), encoding="utf-8")
-        _write_checksums(temporary)
-        os.replace(temporary, output_dir)
+        os.replace(temporary, candidate_dir)
     except BaseException:
         shutil.rmtree(temporary, ignore_errors=True)
         raise
     return {
-        "output_dir": str(output_dir),
+        "candidate_dir": str(candidate_dir),
+        "status": "pending_reproduction",
+        "evaluation_status": metrics["status"],
         "checkpoint_sha256": checkpoint_sha256,
         "schema_sha256": schema["schema_sha256"],
         "thresholds_sha256": thresholds_sha256,
@@ -1415,31 +1747,235 @@ def build_delivery_package(
     }
 
 
+def _validate_reproduction_result(
+    candidate_dir: Path, result_path: Path
+) -> dict[str, Any]:
+    result = _load_json(result_path, name="reproduction result")
+    config_path = candidate_dir / "model_config.json"
+    weights_path = candidate_dir / "lora_and_classifier.safetensors"
+    infer_path = candidate_dir / "infer.py"
+    expected_hashes = {
+        "candidate_weights_sha256": sha256_file(weights_path),
+        "candidate_model_config_sha256": sha256_file(config_path),
+        "candidate_infer_sha256": sha256_file(infer_path),
+    }
+    for key, value in expected_hashes.items():
+        _require_equal(result.get(key), value, name=key)
+    commands = result.get("commands")
+    if not isinstance(commands, list) or not all(
+        isinstance(command, str) and str(infer_path) in command for command in commands
+    ):
+        raise ValueError(
+            "reproduction commands must record candidate infer.py invocations"
+        )
+    if not any("verification_float32" in command for command in commands) or not any(
+        "selected_only" in command for command in commands
+    ):
+        raise ValueError(
+            "reproduction commands must cover float32 and selected-only modes"
+        )
+    environment = result.get("environment")
+    for key in (
+        "gpu",
+        "cuda",
+        "pytorch",
+        "transformers",
+        "peft",
+        "safetensors",
+        "pillow",
+    ):
+        if not isinstance(environment, Mapping) or not environment.get(key):
+            raise ValueError(f"reproduction environment must record {key}")
+    float_path = Path(str(result.get("reproduced_float32_path") or ""))
+    selected_path = Path(str(result.get("reproduced_selected_only_path") or ""))
+    _require_equal(
+        result.get("reproduced_float32_sha256"),
+        sha256_file(float_path),
+        name="reproduced float32 SHA256",
+    )
+    _require_equal(
+        result.get("reproduced_selected_only_sha256"),
+        sha256_file(selected_path),
+        name="reproduced selected-only SHA256",
+    )
+    manifest = _load_jsonl(
+        candidate_dir / "verification" / "verification_32_manifest.jsonl",
+        name="candidate verification manifest",
+    )
+    reference_float = _load_jsonl(
+        candidate_dir / "verification" / "reference_32_float32.jsonl",
+        name="candidate float32 reference",
+    )
+    reference_selected = _load_jsonl(
+        candidate_dir / "verification" / "reference_32_selected_only.jsonl",
+        name="candidate selected reference",
+    )
+    reproduced_float = _load_jsonl(float_path, name="reproduced float32")
+    reproduced_selected = _load_jsonl(selected_path, name="reproduced selected-only")
+    if not all(
+        len(rows) == 32
+        for rows in (
+            manifest,
+            reference_float,
+            reference_selected,
+            reproduced_float,
+            reproduced_selected,
+        )
+    ):
+        raise ValueError("reproduction must contain exactly 32 records")
+    ids = [row["record_id"] for row in manifest]
+    for rows in (
+        reference_float,
+        reference_selected,
+        reproduced_float,
+        reproduced_selected,
+    ):
+        if [row.get("record_id") for row in rows] != ids:
+            raise ValueError(
+                "reproduction record order differs from verification manifest"
+            )
+    score_values = 0
+    for manifest_row, expected, actual in zip(
+        manifest, reference_float, reproduced_float
+    ):
+        _require_equal(
+            actual.get("image_sha256"),
+            manifest_row.get("image_sha256"),
+            name=f"{manifest_row['record_id']} reproduced image SHA256",
+        )
+        expected_scores = expected.get("scores")
+        actual_scores = actual.get("scores")
+        if not isinstance(expected_scores, list) or not isinstance(actual_scores, list):
+            raise ValueError("reproduction scores must be arrays")
+        score_values += len(actual_scores)
+        if actual_scores != expected_scores:
+            raise ValueError(
+                f"reproduction score mismatch for {manifest_row['record_id']}"
+            )
+    for manifest_row, expected, actual in zip(
+        manifest, reference_selected, reproduced_selected
+    ):
+        _require_equal(
+            actual.get("image_sha256"),
+            manifest_row.get("image_sha256"),
+            name=f"{manifest_row['record_id']} selected image SHA256",
+        )
+        _require_equal(
+            actual.get("output"),
+            expected.get("output"),
+            name=f"{manifest_row['record_id']} selected output",
+        )
+    _require_equal(score_values, 1824, name="reproduction score_values")
+    return {
+        "records": 32,
+        "score_values": score_values,
+        "probabilities_exact": True,
+        "max_abs_score_delta": 0.0,
+        "selected_outputs_exact": True,
+        "image_sha256s_exact": True,
+        "commands": commands,
+        "environment": dict(environment),
+        "result_sha256": sha256_file(result_path),
+        "reproduced_float32_sha256": sha256_file(float_path),
+        "reproduced_selected_only_sha256": sha256_file(selected_path),
+    }
+
+
+def seal_delivery_candidate(
+    *,
+    candidate_dir: Path | str,
+    reproduction_result_path: Path | str,
+    output_dir: Path | str,
+) -> dict[str, Any]:
+    candidate_dir = Path(candidate_dir)
+    reproduction_result_path = Path(reproduction_result_path)
+    output_dir = Path(output_dir)
+    if output_dir.exists():
+        raise FileExistsError(f"output directory already exists: {output_dir}")
+    pending = _load_json(
+        candidate_dir / "VERIFICATION.json", name="candidate verification"
+    )
+    _require_equal(
+        pending.get("status"), "pending_reproduction", name="candidate status"
+    )
+    reproduction = _validate_reproduction_result(
+        candidate_dir, reproduction_result_path
+    )
+    output_dir.parent.mkdir(parents=True, exist_ok=True)
+    temporary = Path(
+        tempfile.mkdtemp(prefix=f".{output_dir.name}.", dir=output_dir.parent)
+    )
+    try:
+        shutil.rmtree(temporary)
+        shutil.copytree(candidate_dir, temporary)
+        evaluation_status = pending["evaluation_status"]
+        final_status = "success" if evaluation_status == "success" else "partial"
+        sealed = {
+            **pending,
+            **reproduction,
+            "status": final_status,
+            "customer_ready": final_status == "success",
+            "internal_use_only": final_status != "success",
+            "reproduction_32": reproduction,
+        }
+        _write_json(temporary / "VERIFICATION.json", sealed)
+        _write_checksums(temporary)
+        os.replace(temporary, output_dir)
+    except BaseException:
+        shutil.rmtree(temporary, ignore_errors=True)
+        raise
+    return {
+        "output_dir": str(output_dir),
+        "status": final_status,
+        "customer_ready": final_status == "success",
+        "weights_sha256": sha256_file(output_dir / "lora_and_classifier.safetensors"),
+    }
+
+
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--checkpoint", type=Path, required=True)
-    parser.add_argument("--schema", type=Path, required=True)
-    parser.add_argument("--thresholds", type=Path, required=True)
-    parser.add_argument("--metrics", type=Path, required=True)
-    parser.add_argument("--predictions", type=Path, required=True)
-    parser.add_argument("--verification-dir", type=Path, required=True)
-    parser.add_argument("--final-prompt", type=Path, required=True)
-    parser.add_argument("--output-dir", type=Path, required=True)
+    subparsers = parser.add_subparsers(dest="command", required=True)
+    build = subparsers.add_parser("build-candidate")
+    build.add_argument("--checkpoint", type=Path, required=True)
+    build.add_argument("--schema", type=Path, required=True)
+    build.add_argument("--thresholds", type=Path, required=True)
+    build.add_argument("--metrics", type=Path, required=True)
+    build.add_argument("--test-manifest", type=Path, required=True)
+    build.add_argument("--predictions", type=Path, required=True)
+    build.add_argument("--verification-dir", type=Path, required=True)
+    build.add_argument("--final-prompt", type=Path, required=True)
+    build.add_argument("--expected-trainable-manifest", type=Path, required=True)
+    build.add_argument("--base-model", type=Path, required=True)
+    build.add_argument("--candidate-dir", type=Path, required=True)
+    seal = subparsers.add_parser("seal")
+    seal.add_argument("--candidate-dir", type=Path, required=True)
+    seal.add_argument("--reproduction-result", type=Path, required=True)
+    seal.add_argument("--output-dir", type=Path, required=True)
     return parser.parse_args(argv)
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = parse_args(argv)
-    report = build_delivery_package(
-        checkpoint_path=args.checkpoint,
-        schema_path=args.schema,
-        thresholds_path=args.thresholds,
-        metrics_path=args.metrics,
-        predictions_path=args.predictions,
-        verification_dir=args.verification_dir,
-        final_prompt_path=args.final_prompt,
-        output_dir=args.output_dir,
-    )
+    if args.command == "build-candidate":
+        report = build_delivery_candidate(
+            checkpoint_path=args.checkpoint,
+            schema_path=args.schema,
+            thresholds_path=args.thresholds,
+            metrics_path=args.metrics,
+            test_manifest_path=args.test_manifest,
+            predictions_path=args.predictions,
+            verification_dir=args.verification_dir,
+            final_prompt_path=args.final_prompt,
+            expected_trainable_manifest_path=args.expected_trainable_manifest,
+            base_model_path=args.base_model,
+            candidate_dir=args.candidate_dir,
+        )
+    else:
+        report = seal_delivery_candidate(
+            candidate_dir=args.candidate_dir,
+            reproduction_result_path=args.reproduction_result,
+            output_dir=args.output_dir,
+        )
     print(json.dumps(report, ensure_ascii=False, indent=2))
     return 0
 
