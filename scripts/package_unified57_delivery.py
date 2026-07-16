@@ -1835,6 +1835,9 @@ def _validate_reproduction_result(
                 "reproduction record order differs from verification manifest"
             )
     score_values = 0
+    max_abs_score_delta = 0.0
+    probabilities_exact = True
+    schema = _load_json(candidate_dir / "label_schema.json", name="candidate schema")
     for manifest_row, expected, actual in zip(
         manifest, reference_float, reproduced_float
     ):
@@ -1843,15 +1846,15 @@ def _validate_reproduction_result(
             manifest_row.get("image_sha256"),
             name=f"{manifest_row['record_id']} reproduced image SHA256",
         )
-        expected_scores = expected.get("scores")
-        actual_scores = actual.get("scores")
-        if not isinstance(expected_scores, list) or not isinstance(actual_scores, list):
-            raise ValueError("reproduction scores must be arrays")
+        expected_scores = _score_vector(expected.get("scores") or [], schema)
+        actual_scores = _score_vector(actual.get("scores") or [], schema)
         score_values += len(actual_scores)
-        if actual_scores != expected_scores:
-            raise ValueError(
-                f"reproduction score mismatch for {manifest_row['record_id']}"
-            )
+        for expected_score, actual_score in zip(expected_scores, actual_scores):
+            delta = abs(actual_score - expected_score)
+            max_abs_score_delta = max(max_abs_score_delta, delta)
+            probabilities_exact = probabilities_exact and delta == 0.0
+    selected_outputs_exact = True
+    selected_mismatch_records = 0
     for manifest_row, expected, actual in zip(
         manifest, reference_selected, reproduced_selected
     ):
@@ -1860,18 +1863,19 @@ def _validate_reproduction_result(
             manifest_row.get("image_sha256"),
             name=f"{manifest_row['record_id']} selected image SHA256",
         )
-        _require_equal(
-            actual.get("output"),
-            expected.get("output"),
-            name=f"{manifest_row['record_id']} selected output",
-        )
+        expected_output = _validate_selected_only(expected.get("output"), schema)
+        actual_output = _validate_selected_only(actual.get("output"), schema)
+        if actual_output != expected_output:
+            selected_outputs_exact = False
+            selected_mismatch_records += 1
     _require_equal(score_values, 1824, name="reproduction score_values")
     return {
         "records": 32,
         "score_values": score_values,
-        "probabilities_exact": True,
-        "max_abs_score_delta": 0.0,
-        "selected_outputs_exact": True,
+        "probabilities_exact": probabilities_exact,
+        "max_abs_score_delta": max_abs_score_delta,
+        "selected_outputs_exact": selected_outputs_exact,
+        "selected_mismatch_records": selected_mismatch_records,
         "image_sha256s_exact": True,
         "commands": commands,
         "environment": dict(environment),
@@ -1909,7 +1913,15 @@ def seal_delivery_candidate(
         shutil.rmtree(temporary)
         shutil.copytree(candidate_dir, temporary)
         evaluation_status = pending["evaluation_status"]
-        final_status = "success" if evaluation_status == "success" else "partial"
+        exact_reproduction = (
+            reproduction["probabilities_exact"]
+            and reproduction["selected_outputs_exact"]
+        )
+        final_status = (
+            "success"
+            if evaluation_status == "success" and exact_reproduction
+            else "partial"
+        )
         sealed = {
             **pending,
             **reproduction,

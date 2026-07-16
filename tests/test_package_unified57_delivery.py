@@ -382,7 +382,7 @@ def test_candidate_is_pending_and_partial_is_internal_only(tmp_path: Path) -> No
     assert sealed["internal_use_only"] is True
 
 
-def test_seal_binds_exact_candidate_outputs_and_rejects_score_drift(
+def test_seal_preserves_small_score_drift_as_partial_evidence(
     tmp_path: Path,
 ) -> None:
     fixture = PackageFixture(tmp_path)
@@ -392,14 +392,36 @@ def test_seal_binds_exact_candidate_outputs_and_rejects_score_drift(
         json.loads(line)
         for line in fixture.reproduced_float32.read_text(encoding="utf-8").splitlines()
     ]
-    rows[0]["scores"][0] += 0.01
+    rows[0]["scores"][0] += 0.000001
     _write_jsonl(fixture.reproduced_float32, rows)
     result = json.loads(fixture.reproduction_result.read_text(encoding="utf-8"))
     result["reproduced_float32_sha256"] = _sha256(fixture.reproduced_float32)
     _write_json(fixture.reproduction_result, result)
-    with pytest.raises(ValueError, match="1824|score|probabil"):
+    report = fixture.seal()
+    assert report["status"] == "partial"
+    assert report["customer_ready"] is False
+    verification = json.loads((fixture.output / "VERIFICATION.json").read_text())
+    assert verification["probabilities_exact"] is False
+    assert verification["max_abs_score_delta"] == pytest.approx(0.000001)
+    assert verification["selected_outputs_exact"] is True
+    assert verification["customer_ready"] is False
+
+
+def test_seal_rejects_reproduction_image_hash_mismatch(tmp_path: Path) -> None:
+    fixture = PackageFixture(tmp_path)
+    fixture.build_candidate()
+    fixture.write_reproduction_result()
+    rows = [
+        json.loads(line)
+        for line in fixture.reproduced_float32.read_text(encoding="utf-8").splitlines()
+    ]
+    rows[0]["image_sha256"] = "f" * 64
+    _write_jsonl(fixture.reproduced_float32, rows)
+    result = json.loads(fixture.reproduction_result.read_text(encoding="utf-8"))
+    result["reproduced_float32_sha256"] = _sha256(fixture.reproduced_float32)
+    _write_json(fixture.reproduction_result, result)
+    with pytest.raises(ValueError, match="image SHA256"):
         fixture.seal()
-    assert not fixture.output.exists()
 
 
 def test_one_by_one_lora_fails_independent_shape_contract(tmp_path: Path) -> None:
