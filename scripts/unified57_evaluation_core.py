@@ -106,6 +106,12 @@ def _candidate_thresholds(scores: Iterable[float], fallback: float) -> list[floa
     return sorted({float(fallback), *(float(score) for score in scores)})
 
 
+def _count_greater_equal(sorted_scores: Sequence[float], threshold: float) -> int:
+    """Count scores >= threshold in O(log N) after one ascending sort."""
+
+    return len(sorted_scores) - bisect.bisect_left(sorted_scores, threshold)
+
+
 def calibrate_thresholds(
     rows: Sequence[Mapping[str, Any]],
     schema: Mapping[str, Any],
@@ -133,20 +139,27 @@ def calibrate_thresholds(
             continue
 
         if mode == "pn":
-            observed = [item for item in rows if bool(item["known_mask"][index])]
-            positives = [item for item in observed if float(item["labels"][index]) == 1.0]
-            negatives = [item for item in observed if float(item["labels"][index]) == 0.0]
-            support = {"known_positive": len(positives), "known_negative": len(negatives)}
-            if not positives or not negatives:
+            observed = [
+                (float(item["scores"][index]), int(float(item["labels"][index]) == 1.0))
+                for item in rows
+                if bool(item["known_mask"][index])
+            ]
+            positive_scores = sorted(score for score, truth in observed if truth == 1)
+            negative_scores = sorted(score for score, truth in observed if truth == 0)
+            support = {
+                "known_positive": len(positive_scores),
+                "known_negative": len(negative_scores),
+            }
+            if not positive_scores or not negative_scores:
                 threshold = float(fallback)
                 status = "fallback_insufficient_support"
             else:
-                candidates = _candidate_thresholds((item["scores"][index] for item in observed), fallback)
+                candidates = _candidate_thresholds((score for score, _ in observed), fallback)
 
                 def key(threshold_value: float) -> tuple[float, float, float]:
-                    tp = sum(float(item["scores"][index]) >= threshold_value for item in positives)
-                    fp = sum(float(item["scores"][index]) >= threshold_value for item in negatives)
-                    fn = len(positives) - tp
+                    tp = _count_greater_equal(positive_scores, threshold_value)
+                    fp = _count_greater_equal(negative_scores, threshold_value)
+                    fn = len(positive_scores) - tp
                     return (_f1(tp, fp, fn), -abs(threshold_value - fallback), threshold_value)
 
                 threshold = max(candidates, key=key)
@@ -160,29 +173,29 @@ def calibrate_thresholds(
             }
             continue
 
-        positives = [item for item in rows if bool(item["pu_positive_mask"][index])]
-        unlabeled = [
+        positive_rows = [item for item in rows if bool(item["pu_positive_mask"][index])]
+        unlabeled_rows = [
             item
             for item in rows
             if not bool(item["known_mask"][index]) and not bool(item["pu_positive_mask"][index])
         ]
-        support = {"positive": len(positives), "unlabeled": len(unlabeled)}
-        if len(positives) < 5 or len(unlabeled) < 50:
+        support = {"positive": len(positive_rows), "unlabeled": len(unlabeled_rows)}
+        if len(positive_rows) < 5 or len(unlabeled_rows) < 50:
             threshold = float(fallback)
             status = "fallback_insufficient_support"
         else:
-            candidates = _candidate_thresholds(
-                (item["scores"][index] for item in (*positives, *unlabeled)), fallback
-            )
+            positive_scores = sorted(float(item["scores"][index]) for item in positive_rows)
+            unlabeled_scores = sorted(float(item["scores"][index]) for item in unlabeled_rows)
+            candidates = _candidate_thresholds((*positive_scores, *unlabeled_scores), fallback)
 
             def key(threshold_value: float) -> tuple[float, float, float, float]:
                 recall = _safe_ratio(
-                    sum(float(item["scores"][index]) >= threshold_value for item in positives),
-                    len(positives),
+                    _count_greater_equal(positive_scores, threshold_value),
+                    len(positive_scores),
                 )
                 coverage = _safe_ratio(
-                    sum(float(item["scores"][index]) >= threshold_value for item in unlabeled),
-                    len(unlabeled),
+                    _count_greater_equal(unlabeled_scores, threshold_value),
+                    len(unlabeled_scores),
                 )
                 return (recall - coverage, recall, -abs(threshold_value - fallback), threshold_value)
 
@@ -301,8 +314,17 @@ def evaluate_pn_slice(
         key: _safe_ratio(sum(item[key] for item in eligible), len(eligible)) for key in macro_keys
     }
     macro["labels_evaluated"] = len(eligible)
-    macro["labels_with_both_classes"] = sum(
-        item["known_positive"] > 0 and item["known_negative"] > 0 for item in eligible
+    both_class = [
+        item for item in eligible if item["known_positive"] > 0 and item["known_negative"] > 0
+    ]
+    positive_labels = [item for item in eligible if item["known_positive"] > 0]
+    macro["labels_with_both_classes"] = len(both_class)
+    macro["f1_both_class_labels"] = _safe_ratio(
+        sum(item["f1"] for item in both_class), len(both_class)
+    )
+    macro["positive_labels_evaluated"] = len(positive_labels)
+    macro["positive_labels_macro_recall"] = _safe_ratio(
+        sum(item["recall"] for item in positive_labels), len(positive_labels)
     )
     micro = _counts_metrics(totals)
     return {
@@ -712,7 +734,11 @@ class BufferedPredictionShard:
                 handle.truncate(self.durable_offset)
             self._load_durable_rows()
         elif self.path.exists() and self.path.stat().st_size:
-            raise ValueError("non-empty prediction shard has no durable sidecar")
+            # No sidecar means no byte was ever declared durable.  A process can
+            # die after buffered writes and before its first sync; recovery is
+            # therefore a safe truncate-to-zero, not a parse attempt.
+            with self.path.open("r+b") as handle:
+                handle.truncate(0)
         else:
             self.path.touch()
 
@@ -862,11 +888,40 @@ def select_verification_records(
     ordered = sorted(rows, key=key)
     selected: list[Mapping[str, Any]] = []
     selected_ids: set[str] = set()
+
+    def has_pn_positive(item: Mapping[str, Any]) -> bool:
+        return any(
+            bool(known) and float(label) == 1.0
+            for known, label in zip(item.get("known_mask", []), item.get("labels", []))
+        )
+
+    def has_pu_positive(item: Mapping[str, Any]) -> bool:
+        return any(bool(value) for value in item.get("pu_positive_mask", []))
+
+    def aspect_bucket(item: Mapping[str, Any]) -> str | None:
+        ratio = item.get("aspect_ratio", item.get("aspect"))
+        if ratio is None:
+            width = item.get("width", item.get("image_width"))
+            height = item.get("height", item.get("image_height"))
+            if width is None or height is None or float(height) <= 0:
+                return None
+            ratio = float(width) / float(height)
+        ratio = float(ratio)
+        if ratio < 0.8:
+            return "portrait"
+        if ratio > 1.25:
+            return "landscape"
+        return "square"
+
     strata = [
         lambda item: item.get("sources") == ["jd_complete23"],
         lambda item: item.get("sources") == ["dictionary_v4"],
         lambda item: set(item.get("sources", [])) == {"jd_complete23", "dictionary_v4"},
-        lambda item: any(bool(value) for value in item.get("pu_positive_mask", [])),
+        has_pn_positive,
+        has_pu_positive,
+        lambda item: aspect_bucket(item) == "portrait",
+        lambda item: aspect_bucket(item) == "square",
+        lambda item: aspect_bucket(item) == "landscape",
     ]
     for predicate in strata:
         candidate = next(

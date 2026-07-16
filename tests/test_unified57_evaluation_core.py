@@ -92,6 +92,30 @@ def test_calibration_falls_back_when_support_is_insufficient():
     assert payload["labels"]["连帽"]["status"] == "fallback_insufficient_support"
 
 
+def test_calibration_score_access_is_subquadratic():
+    class CountingScores(list):
+        accesses = 0
+
+        def __getitem__(self, item):
+            type(self).accesses += 1
+            return super().__getitem__(item)
+
+    rows = []
+    for i in range(200):
+        scores = CountingScores(vector({"连帽": (i + 1) / 201}))
+        rows.append(
+            row(
+                record_id=f"r{i}",
+                scores=scores,
+                labels=vector({"连帽": int(i >= 100)}),
+                known=vector({"连帽": 1}),
+            )
+        )
+    CountingScores.accesses = 0
+    calibrate_thresholds(rows, SCHEMA)
+    assert CountingScores.accesses < 2_000
+
+
 def test_pu_calibration_optimizes_positive_minus_unlabeled_coverage():
     rows = []
     for i, score in enumerate([0.9, 0.85, 0.8, 0.75, 0.7]):
@@ -102,6 +126,55 @@ def test_pu_calibration_optimizes_positive_minus_unlabeled_coverage():
     assert item["method"] == "positive_minus_unlabeled_coverage"
     assert item["status"] == "calibrated"
     assert item["threshold"] == 0.7
+
+
+def test_optimized_calibration_matches_bruteforce_reference():
+    rows = []
+    hood_scores = [0.91, 0.82, 0.61, 0.52, 0.31, 0.88, 0.73, 0.55, 0.42, 0.12]
+    for i, score in enumerate(hood_scores):
+        rows.append(
+            row(
+                record_id=f"pn{i}",
+                scores=vector({"连帽": score}),
+                labels=vector({"连帽": int(i < 5)}),
+                known=vector({"连帽": 1}),
+            )
+        )
+    for i, score in enumerate([0.92, 0.81, 0.74, 0.63, 0.58]):
+        rows.append(row(record_id=f"p{i}", scores=vector({"织带": score}), pu=vector({"织带": 1})))
+    for i in range(50):
+        rows.append(row(record_id=f"u{i}", scores=vector({"织带": 0.05 + i / 100})))
+
+    calibrated = calibrate_thresholds(rows, SCHEMA)
+
+    pn_candidates = sorted({0.5, *hood_scores})
+    expected_pn = max(
+        pn_candidates,
+        key=lambda t: (
+            (lambda tp, fp, fn: 2 * tp / (2 * tp + fp + fn) if 2 * tp + fp + fn else 0)(
+                sum(score >= t for score in hood_scores[:5]),
+                sum(score >= t for score in hood_scores[5:]),
+                sum(score < t for score in hood_scores[:5]),
+            ),
+            -abs(t - 0.5),
+            t,
+        ),
+    )
+    p_scores = [0.92, 0.81, 0.74, 0.63, 0.58]
+    u_scores = [0.05 + i / 100 for i in range(50)]
+    pu_candidates = sorted({0.5, *p_scores, *u_scores})
+    expected_pu = max(
+        pu_candidates,
+        key=lambda t: (
+            sum(score >= t for score in p_scores) / len(p_scores)
+            - sum(score >= t for score in u_scores) / len(u_scores),
+            sum(score >= t for score in p_scores) / len(p_scores),
+            -abs(t - 0.5),
+            t,
+        ),
+    )
+    assert calibrated["labels"]["连帽"]["threshold"] == expected_pn
+    assert calibrated["labels"]["织带"]["threshold"] == expected_pu
 
 
 def test_raw_keeps_multi_positive_and_final_uses_stable_schema_tie():
@@ -153,6 +226,21 @@ def test_views_report_contract_forced_false_negative_and_clean_slices():
     assert report["raw_thresholded"]["jd23_clean"]["record_count"] == 1
     assert report["raw_thresholded"]["dictionary_pn_clean"]["record_count"] == 1
     assert report["raw_thresholded"]["mixed_exact_audit"]["record_count"] == 1
+    assert "连帽" in report["raw_thresholded"]["overall_36pn"]["per_label"]
+    dictionary_macro = report["raw_thresholded"]["dictionary_pn_clean"]["macro"]
+    assert dictionary_macro["positive_labels_macro_recall"] == 1.0
+    assert dictionary_macro["positive_labels_evaluated"] == 1
+
+
+def test_pn_macro_exposes_both_class_f1_separately():
+    rows = [
+        row(labels=vector({"连帽": 1}), known=vector({"连帽": 1, "立领": 1})),
+        row(labels=vector({"连帽": 0}), known=vector({"连帽": 1, "立领": 1})),
+    ]
+    binary = [vector({"连帽": 1}), vector({"连帽": 0})]
+    report = evaluate_pn_slice(rows, binary, [INDEX["连帽"], INDEX["立领"]])
+    assert report["macro"]["f1_both_class_labels"] == 1.0
+    assert report["macro"]["labels_with_both_classes"] == 1
 
 
 def test_renderers_enforce_57_two_decimal_scores_and_four_categories():
@@ -207,6 +295,20 @@ def test_buffered_shard_time_sync_and_metadata_drift(tmp_path):
         BufferedPredictionShard(path, {"split": "test", "rank": 0})
 
 
+def test_buffered_shard_crash_before_first_sync_recovers_from_zero(tmp_path):
+    path = tmp_path / "rank00.part.jsonl"
+    meta = {"split": "test", "rank": 0}
+    shard = BufferedPredictionShard(path, meta)
+    shard.append_batch([{"record_id": "not-durable"}], 1)
+    shard._handle.flush()
+    shard._handle.close()  # simulate process death before the first fsync+sidecar boundary
+    resumed = BufferedPredictionShard(path, meta)
+    assert path.stat().st_size == 0
+    assert resumed.durable_records == 0
+    assert resumed.next_local_index == 0
+    resumed.close(complete=False)
+
+
 def test_verification_selection_is_deterministic_and_comparator_requires_32x57():
     rows = [row(record_id=f"r{i}", sources=["dictionary_v4"] if i % 2 else ["jd_complete23"]) for i in range(40)]
     first = select_verification_records(rows, count=32, seed=20260717)
@@ -221,3 +323,20 @@ def test_verification_selection_is_deterministic_and_comparator_requires_32x57()
         "max_abs_score_delta": 0.0,
         "selected_outputs_exact": True,
     }
+
+
+def test_verification_selection_covers_sources_supervision_and_aspect_buckets():
+    rows = [row(record_id=f"r{i}", sources=["jd_complete23"] if i % 2 == 0 else ["dictionary_v4"]) for i in range(40)]
+    rows[0].update(width=200, height=500, labels=vector({"连帽": 1}), known_mask=vector({"连帽": 1}))
+    rows[1].update(width=500, height=200, pu_positive_mask=vector({"织带": 1}))
+    rows[2].update(width=300, height=300, sources=["jd_complete23", "dictionary_v4"])
+    selected = select_verification_records(rows, count=32, seed=20260717)
+    assert any(item["sources"] == ["jd_complete23"] for item in selected)
+    assert any(item["sources"] == ["dictionary_v4"] for item in selected)
+    assert any(set(item["sources"]) == {"jd_complete23", "dictionary_v4"} for item in selected)
+    assert any(any(k and y == 1 for k, y in zip(item["known_mask"], item["labels"])) for item in selected)
+    assert any(any(item["pu_positive_mask"]) for item in selected)
+    ratios = [item["width"] / item["height"] for item in selected if "width" in item]
+    assert any(value < 0.8 for value in ratios)
+    assert any(0.8 <= value <= 1.25 for value in ratios)
+    assert any(value > 1.25 for value in ratios)
