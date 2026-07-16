@@ -4,16 +4,17 @@ public struct ThermalPresentation: Sendable {
     public let title: String
     public let detail: String
 
-    public init(state: OwlThermalState) {
+    public init(state: OwlThermalState, language: AppLanguage = .zhHans) {
+        let en = language == .en
         switch state {
         case .nominal:
-            title = "正常"; detail = "电脑运行状态良好"
+            title = en ? "Normal" : "正常"; detail = en ? "Mac is running normally" : "电脑运行状态良好"
         case .fair:
-            title = "偏热"; detail = "建议留意高占用应用"
+            title = en ? "Elevated" : "偏热"; detail = en ? "Review high-usage applications" : "建议留意高占用应用"
         case .serious:
-            title = "严重"; detail = "请改善通风并检查高占用应用"
+            title = en ? "Serious" : "严重"; detail = en ? "Improve ventilation and review high-usage applications" : "请改善通风并检查高占用应用"
         case .critical:
-            title = "危急"; detail = "正在执行过热保护"
+            title = en ? "Critical" : "危急"; detail = en ? "Thermal protection is active" : "正在执行过热保护"
         }
     }
 }

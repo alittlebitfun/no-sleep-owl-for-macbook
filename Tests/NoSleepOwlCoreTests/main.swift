@@ -19,6 +19,58 @@ private func expect(_ condition: @autoclosure () -> Bool, _ message: String) thr
     guard condition() else { throw TestError.expectation(message) }
 }
 
+private func isolatedDefaults() -> UserDefaults {
+    let suite = "NoSleepOwlTests.\(UUID().uuidString)"
+    let defaults = UserDefaults(suiteName: suite)!
+    defaults.removePersistentDomain(forName: suite)
+    return defaults
+}
+
+test("preferences default to Chinese with both monitors visible") {
+    let preferences = AppPreferences(defaults: isolatedDefaults())
+    try expect(preferences.snapshot == AppPreferenceSnapshot(language: .zhHans, showsThermalStatus: true, showsHighUsageApps: true), "wrong defaults")
+}
+
+test("preferences persist and unknown language falls back to Chinese") {
+    let defaults = isolatedDefaults()
+    let preferences = AppPreferences(defaults: defaults)
+    preferences.setLanguage(.en)
+    preferences.setShowsThermalStatus(false)
+    preferences.setShowsHighUsageApps(false)
+    try expect(AppPreferences(defaults: defaults).snapshot == AppPreferenceSnapshot(language: .en, showsThermalStatus: false, showsHighUsageApps: false), "preferences did not persist")
+    defaults.set("unknown", forKey: AppPreferences.Keys.language)
+    try expect(AppPreferences(defaults: defaults).snapshot.language == .zhHans, "unknown language must fall back")
+}
+
+test("monitoring display policy covers all combinations") {
+    try expect(MonitoringDisplayPolicy.mode(thermal: true, applications: true) == .full, "full mode")
+    try expect(MonitoringDisplayPolicy.mode(thermal: true, applications: false) == .thermalOnly, "thermal mode")
+    try expect(MonitoringDisplayPolicy.mode(thermal: false, applications: true) == .applicationsOnly, "applications mode")
+    try expect(MonitoringDisplayPolicy.mode(thermal: false, applications: false) == .hidden, "hidden mode")
+}
+
+test("English strings cover settings and monitoring") {
+    let strings = AppStrings(language: .en)
+    try expect(strings.settingsMenuTitle == "Settings…", "settings title")
+    try expect(strings.showThermalStatus == "Show thermal status", "thermal setting")
+    try expect(BirdPresentation(mode: .owl, language: .en).statusTitle == "Owl is keeping watch", "owl title")
+    try expect(ThermalPresentation(state: .serious, language: .en).title == "Serious", "thermal title")
+}
+
+test("dynamic application copy is bilingual") {
+    let zh = AppStrings(language: .zhHans)
+    let en = AppStrings(language: .en)
+    try expect(zh.duration(65).contains("01:05"), "Chinese duration")
+    try expect(en.duration(65).contains("01:05"), "English duration")
+    try expect(zh.loginAtStartup == "登录时自动启动", "Chinese login label")
+    try expect(en.loginAtStartup == "Launch at Login", "English login label")
+    try expect(zh.quitApplication.contains("退出"), "Chinese quit label")
+    try expect(en.quitApplication == "Quit No Sleep Owl", "English quit label")
+    try expect(en.helperApproved.contains("approved"), "English helper state")
+    try expect(en.lowBatteryWarning.contains("20%"), "English battery warning")
+    try expect(en.thermalWarning.lowercased().contains("thermal"), "English thermal warning")
+}
+
 test("starts in bird mode") {
     let store = OwlModeStore(controller: FakeSleepAssertionController())
     try expect(store.mode == .bird, "expected bird mode")
