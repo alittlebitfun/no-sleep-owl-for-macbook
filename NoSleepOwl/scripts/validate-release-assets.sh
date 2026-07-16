@@ -3,10 +3,10 @@ set -euo pipefail
 
 ROOT="${0:A:h:h}"
 PLIST="$ROOT/Resources/Info.plist"
-grep -q 'foregroundScale.*0.90' "$ROOT/scripts/generate-app-icon.swift"
+grep -q 'iconScale.*0.80' "$ROOT/scripts/generate-app-icon.swift"
 
 [[ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$PLIST")" == "0.1.0" ]]
-[[ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$PLIST")" == "2" ]]
+[[ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$PLIST")" == "4" ]]
 [[ "$(sips -g pixelWidth "$ROOT/Resources/AppIcon.png" | awk '/pixelWidth/{print $2}')" == "1024" ]]
 [[ "$(sips -g pixelHeight "$ROOT/Resources/AppIcon.png" | awk '/pixelHeight/{print $2}')" == "1024" ]]
 iconutil --convert iconset --output "${TMPDIR:-/tmp}/NoSleepOwl-validation.iconset" "$ROOT/Resources/AppIcon.icns"
