@@ -19,6 +19,7 @@ import shutil
 import socket
 import tempfile
 import time
+from importlib.metadata import version as package_version
 from pathlib import Path
 from typing import Any, Iterable, Mapping, Sequence
 
@@ -497,7 +498,9 @@ def write_delivery_outputs(
     _atomic_jsonl(reference_float, verification_dir / "reference_32_float32.jsonl")
     _atomic_jsonl(reference_selected, verification_dir / "reference_32_selected_only.jsonl")
 
-    representatives = select_verification_records(rows, count=6, seed=20260718)
+    # The core selector can satisfy several mandatory strata before filling;
+    # cap explicitly because the delivery contract is exactly six records.
+    representatives = select_verification_records(rows, count=6, seed=20260718)[:6]
     representative_dir = output_dir / "representative6"
     image_dir = representative_dir / "images"
     image_dir.mkdir(parents=True, exist_ok=True)
@@ -554,7 +557,9 @@ def write_delivery_outputs(
         source_path = Path(str(row.get("image_path", "")))
         if source_path.is_file():
             suffix = source_path.suffix.lower() or ".jpg"
-            copy_path = image_dir / f"{index:02d}_{row['record_id']}{suffix}"
+            stable_name = str(row.get("image_sha256") or row["record_id"])
+            stable_name = "".join(char for char in stable_name if char.isalnum())[:24] or "image"
+            copy_path = image_dir / f"{index:02d}_{stable_name}{suffix}"
             shutil.copy2(source_path, copy_path)
             entry["copied_image"] = str(copy_path)
         representative_manifest.append(entry)
@@ -588,6 +593,7 @@ def write_delivery_outputs(
         "classification": classification,
         "performance": performance,
         "verification": {"records": 32, "score_values": 32 * 57},
+        "representative_6": representative_manifest,
         "representative_records": 6,
     }
     _atomic_json(report, output_dir / "metrics.json")
@@ -787,6 +793,8 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--validation-manifest-sha256", required=True)
     parser.add_argument("--test-manifest", type=Path, required=True)
     parser.add_argument("--test-manifest-sha256", required=True)
+    parser.add_argument("--expected-trainable-manifest-sha256", required=True)
+    parser.add_argument("--base-artifact-manifest-sha256", required=True)
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--wall-clock-seconds", type=float, required=True)
     parser.add_argument("--expected-world-size", type=int, default=8)
@@ -801,6 +809,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     for field in (
         "model_config_sha256", "schema_file_sha256", "checkpoint_sha256",
         "validation_manifest_sha256", "test_manifest_sha256",
+        "expected_trainable_manifest_sha256", "base_artifact_manifest_sha256",
     ):
         try:
             _require_sha256(getattr(args, field), field)
@@ -901,6 +910,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             return 75
 
         threshold_objects: list[Any] = [None, None]
+        report: dict[str, Any] | None = None
+        status: str | None = None
         if rank == 0:
             threshold_path = args.output_dir / "thresholds.json"
             threshold_objects[0] = freeze_thresholds(
@@ -923,10 +934,12 @@ def main(argv: Sequence[str] | None = None) -> int:
 
         contract = {
             "checkpoint_sha256": checkpoint_sha,
-            "threshold_sha256": threshold_sha,
+            "thresholds_sha256": threshold_sha,
             "validation_manifest_sha256": args.validation_manifest_sha256,
             "test_manifest_sha256": args.test_manifest_sha256,
             "schema_sha256": schema["schema_sha256"],
+            "trainable_manifest_sha256": args.expected_trainable_manifest_sha256,
+            "base_artifact_manifest_sha256": args.base_artifact_manifest_sha256,
         }
         if rank == 0:
             _freeze_test_contract(args.output_dir / "test_run_contract.json", contract)
@@ -980,6 +993,11 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "platform": platform.platform(),
                 "python": platform.python_version(),
                 "torch": torch.__version__,
+                "pytorch": torch.__version__,
+                "transformers": package_version("transformers"),
+                "peft": package_version("peft"),
+                "safetensors": package_version("safetensors"),
+                "pillow": package_version("Pillow"),
                 "cuda": torch.version.cuda,
                 "world_size": world_size,
                 "gpu_names": [torch.cuda.get_device_name(index) for index in range(torch.cuda.device_count())],
@@ -995,7 +1013,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "validation_predictions_sha256": sha256_file(
                     args.output_dir / "validation_predictions_float32.jsonl"
                 ),
-                "test_predictions_sha256": sha256_file(
+                "predictions_sha256": sha256_file(
                     args.output_dir / "test_predictions_float32.jsonl"
                 ),
                 "thresholds_sha256": threshold_sha,
@@ -1038,24 +1056,47 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "output_quality": delivery["output_quality"] if delivery else None,
                 "validation_metrics": validation_metrics,
                 "reproduction_32": {
-                    "status": "pending_package_seal" if test_complete else "blocked_incomplete_test",
+                    "status": "pending_reproduction" if test_complete else "blocked_incomplete_test",
                     "records": 32 if test_complete else 0,
                     "score_values": 32 * 57 if test_complete else 0,
                     "reference_float32": "verification/reference_32_float32.jsonl",
                     "reference_selected_only": "verification/reference_32_selected_only.jsonl",
                     "note": "Exact replay is measured by the sealed delivery package; evaluator only freezes references.",
                 },
-                "representative_6": {
-                    "records": 6 if test_complete else 0,
+                "representative_6": delivery["representative_6"] if delivery else [],
+                "representative_6_paths": {
                     "manifest": "representative6/manifest.jsonl",
                     "images": "representative6/images/",
                 },
-                "process_cleanup": {"distributed_barrier_reached": True, "unrelated_processes_touched": 0},
+                "process_cleanup": {
+                    "complete": False,
+                    "distributed_barrier_reached": False,
+                    "unrelated_processes_touched": 0,
+                },
             }
-            _atomic_json(report, args.output_dir / "evaluation_report.json")
-            _atomic_json({"state": status, "test_complete": test_complete}, args.output_dir / "status.json")
-            print(json.dumps(report, ensure_ascii=False), flush=True)
+        # This is the final distributed barrier. The candidate report is
+        # deliberately unpublished until every rank has finished inference and
+        # rank-local shard close/fsync work.
         dist.barrier()
+        dist.destroy_process_group()
+        del model
+        torch.cuda.empty_cache()
+        if rank == 0:
+            assert report is not None and status is not None
+            report["process_cleanup"] = {
+                "complete": True,
+                "distributed_barrier_reached": True,
+                "distributed_group_destroyed": True,
+                "cuda_cache_released": True,
+                "unrelated_processes_touched": 0,
+            }
+            report["timing"]["elapsed_seconds"] = time.monotonic() - started_mono
+            _atomic_json(report, args.output_dir / "evaluation_report.json")
+            _atomic_json(
+                {"state": status, "test_complete": test_complete},
+                args.output_dir / "status.json",
+            )
+            print(json.dumps(report, ensure_ascii=False), flush=True)
         return 0 if test_complete else 75
     finally:
         if dist.is_initialized():

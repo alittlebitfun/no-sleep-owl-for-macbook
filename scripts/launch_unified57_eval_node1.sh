@@ -17,6 +17,8 @@ SCHEMA_FILE_SHA256="${SCHEMA_FILE_SHA256:-43620d06b5db44f667803038b5039732bd7014
 VALIDATION_MANIFEST_SHA256="${VALIDATION_MANIFEST_SHA256:-1cbb2aca6c98c32cb1e7666185a5fa5d5a780836cd8c0bcfca712d19d5a42891}"
 TEST_MANIFEST_SHA256="${TEST_MANIFEST_SHA256:-cd81ba30c1266afebbef333a69fb4e8ddcb7b12f0ab94c6edfbc34db0039aef8}"
 CHECKPOINT_SHA256="${CHECKPOINT_SHA256:-$(sha256sum "${CHECKPOINT}" | awk '{print $1}')}"
+: "${EXPECTED_TRAINABLE_MANIFEST_SHA256:?set EXPECTED_TRAINABLE_MANIFEST_SHA256 to the sealed expected-trainable manifest SHA256}"
+: "${BASE_ARTIFACT_MANIFEST_SHA256:?set BASE_ARTIFACT_MANIFEST_SHA256 to the canonical base-artifact manifest SHA256}"
 
 mkdir -p "${OUTPUT_DIR}/logs"
 export PYTHONPATH="${PROJECT_ROOT}:${PYTHONPATH:-}"
@@ -37,6 +39,8 @@ exec "${PYTHON}" -m torch.distributed.run \
   --validation-manifest-sha256 "${VALIDATION_MANIFEST_SHA256}" \
   --test-manifest "${TEST_MANIFEST}" \
   --test-manifest-sha256 "${TEST_MANIFEST_SHA256}" \
+  --expected-trainable-manifest-sha256 "${EXPECTED_TRAINABLE_MANIFEST_SHA256}" \
+  --base-artifact-manifest-sha256 "${BASE_ARTIFACT_MANIFEST_SHA256}" \
   --output-dir "${OUTPUT_DIR}" \
   --wall-clock-seconds "${WALL_CLOCK_SECONDS:-2700}" \
   --expected-world-size 8 \

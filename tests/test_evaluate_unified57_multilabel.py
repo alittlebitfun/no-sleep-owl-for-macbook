@@ -125,6 +125,8 @@ def test_render_delivery_outputs_masks_unsupported_and_builds_references(tmp_pat
     assert report["verification"]["records"] == 32
     assert "raw_thresholded" in report["performance"]
     assert "final_format" in report["performance"]
+    assert isinstance(report["representative_6"], list)
+    assert len(report["representative_6"]) == 6
     first = json.loads((tmp_path / "test_all_scores.jsonl").read_text().splitlines()[0])
     assert first["scores"]["假两件"] == "0.00"
     verification_manifest = json.loads(
@@ -185,11 +187,14 @@ def test_parse_args_requires_explicit_hashes_and_two_manifests(tmp_path):
         "--checkpoint", "/latest.pt", "--checkpoint-sha256", "b" * 64,
         "--validation-manifest", "/val.jsonl", "--validation-manifest-sha256", "c" * 64,
         "--test-manifest", "/test.jsonl", "--test-manifest-sha256", "d" * 64,
+        "--expected-trainable-manifest-sha256", "f" * 64,
+        "--base-artifact-manifest-sha256", "9" * 64,
         "--output-dir", str(tmp_path), "--wall-clock-seconds", "2700",
     ]
     args = parse_args(argv)
     assert args.expected_world_size == 8
     assert args.model_config_sha256 == "e" * 64
     assert args.test_manifest_sha256 == "d" * 64
+    assert args.expected_trainable_manifest_sha256 == "f" * 64
     with pytest.raises(SystemExit):
         parse_args(["--model", "/model"])
