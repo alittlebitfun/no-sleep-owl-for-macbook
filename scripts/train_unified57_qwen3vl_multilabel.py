@@ -2071,7 +2071,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     if dist.is_initialized():
         dist.barrier()
         dist.destroy_process_group()
-    return 0 if run_complete else 3
+    # A graceful partial run has already persisted checkpoint/report state.
+    # Return success from every rank so torchrun does not wrap it as a child
+    # failure; the launcher maps report.status=partial to its status sidecar.
+    return 0
 
 
 if __name__ == "__main__":

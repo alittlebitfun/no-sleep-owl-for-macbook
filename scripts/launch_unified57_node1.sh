@@ -105,20 +105,21 @@ run_worker() {
   set +e
   "${command[@]}" 2>&1 | tee -a "${RUN_DIR}/logs/train.log"
   local training_exit="${PIPESTATUS[0]}"
+  local worker_exit="${training_exit}"
   set -e
   if [[ "${training_exit}" -eq 0 ]] && \
     grep -q '"status": "complete"' "${RUN_DIR}/smoke_report.json" 2>/dev/null; then
     write_status "exited" 0
   elif grep -q '"status": "partial"' "${RUN_DIR}/smoke_report.json" 2>/dev/null; then
-    training_exit=3
     write_status "partial" 3
+    worker_exit=0
   else
-    if [[ "${training_exit}" -eq 0 ]]; then
-      training_exit=4
+    if [[ "${worker_exit}" -eq 0 ]]; then
+      worker_exit=4
     fi
-    write_status "failed" "${training_exit}"
+    write_status "failed" "${worker_exit}"
   fi
-  exit "${training_exit}"
+  exit "${worker_exit}"
 }
 
 if [[ "${1:-}" == "--worker" ]]; then

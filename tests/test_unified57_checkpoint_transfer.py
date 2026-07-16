@@ -136,10 +136,17 @@ def test_static_contract_fixes_336_square_and_safe_smoke_defaults() -> None:
     )
     assert "while not target_reached:" in trainer
     assert '"status": "complete" if run_complete else "partial"' in trainer
-    assert "return 0 if run_complete else 3" in trainer
+    assert (
+        '"pn_pos_weight_scope": '
+        '"deterministic two-stream schedule known-cell exposures"'
+    ) in trainer
+    assert "return 0 if run_complete else 3" not in trainer
+    assert "return 0\n\n\nif __name__" in trainer
     assert "smoke_report.previous.json" in launcher
-    assert "training_exit=3" in launcher
+    assert 'elif grep -q \'"status": "partial"\'' in launcher
+    assert "worker_exit=0" in launcher
     assert 'write_status "partial" 3' in launcher
+    assert 'exit "${worker_exit}"' in launcher
 
 
 def test_schema_digest_and_training_mode_counts_are_self_consistent() -> None:
