@@ -962,6 +962,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             image_max_pixels=args.image_max_pixels,
             deadline_monotonic=deadline,
         )
+        verify_file_sha256(
+            args.output_dir / "thresholds.json", threshold_sha, "threshold file after test"
+        )
         if rank == 0:
             if test_complete:
                 delivery = write_delivery_outputs(
