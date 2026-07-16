@@ -1430,6 +1430,10 @@ def audit_reproduction_bundle(
     posttrain_dir: Path | str,
     candidate_dir: Path | str,
     *,
+    evaluation_dir: Path | str,
+    test_rows: Sequence[Mapping[str, Any]],
+    thresholds: Mapping[str, Any],
+    schema: Mapping[str, Any],
     expected_records: int = 32,
 ) -> dict[str, Any]:
     """Independently verify candidate references and exact replay outputs."""
@@ -1508,6 +1512,14 @@ def audit_reproduction_bundle(
             references.get(name) == sha256_file(path),
             f"candidate verification reference drifted: {name}",
         )
+    formal_verification = Path(evaluation_dir) / "verification"
+    for name, candidate_path in reference_paths.items():
+        formal_path = formal_verification / name
+        _require(
+            formal_path.is_file()
+            and sha256_file(candidate_path) == sha256_file(formal_path),
+            f"candidate reference differs from formal evaluation verification: {name}",
+        )
 
     output_paths: dict[str, Path] = {}
     for path_key, sha_key in (
@@ -1548,6 +1560,58 @@ def audit_reproduction_bundle(
         _require(
             [row.get("record_id") for row in rows] == ids,
             "reproduction record order differs from verification manifest",
+        )
+
+    test_by_id = {str(row.get("record_id")): row for row in test_rows}
+    test_index = {
+        str(row.get("record_id")): index for index, row in enumerate(test_rows)
+    }
+    _require(
+        len(test_by_id) == len(test_rows),
+        "formal test predictions contain duplicate record identifiers",
+    )
+    for manifest_row, reference_row, selected_row in zip(
+        manifest, reference_float, reference_selected
+    ):
+        record_id = str(manifest_row["record_id"])
+        _require(
+            record_id in test_by_id,
+            f"{record_id}: verification record is absent from formal test predictions",
+        )
+        formal_row = test_by_id[record_id]
+        if "test_manifest_index" in manifest_row:
+            _require(
+                manifest_row.get("test_manifest_index") == test_index[record_id],
+                f"{record_id}: verification test manifest index differs",
+            )
+        for field in ("image_path", "image_sha256"):
+            _require(
+                manifest_row.get(field) == formal_row.get(field),
+                f"{record_id}: verification manifest differs from formal test at {field}",
+            )
+        for field in (
+            "record_id",
+            *EVIDENCE_FIELDS,
+            "checkpoint_sha256",
+            "scores",
+            "width",
+            "height",
+            "aspect_ratio",
+        ):
+            if field in reference_row or field in formal_row:
+                _require(
+                    reference_row.get(field) == formal_row.get(field),
+                    f"{record_id}: float32 reference differs from formal test prediction at {field}",
+                )
+        _, final_prediction = _prediction_vectors(
+            [formal_row], thresholds, schema
+        )
+        expected_selected = _render_selected(
+            formal_row["scores"], final_prediction[0], schema
+        )
+        _require(
+            selected_row.get("output") == expected_selected,
+            f"{record_id}: selected reference differs from formal test prediction",
         )
 
     score_values = 0
@@ -1615,6 +1679,56 @@ def audit_packaged_output_modes(
         root / "reproduction_result.json", name="posttrain reproduction result"
     )
     _require(isinstance(reproduction, Mapping), "reproduction result must be an object")
+    candidate = root.parent / "delivery_candidate"
+    candidate_infer = candidate / "infer.py"
+    _require(candidate_infer.is_file(), "candidate infer.py is missing")
+    _require(
+        summary.get("candidate_infer_sha256") == sha256_file(candidate_infer)
+        == reproduction.get("candidate_infer_sha256"),
+        "final mode candidate infer SHA256 binding mismatch",
+    )
+    reproduction_path = root / "reproduction_result.json"
+    _require(
+        summary.get("reproduction_result_sha256")
+        == sha256_file(reproduction_path),
+        "final modes are not bound to the current reproduction result",
+    )
+    commands = summary.get("commands")
+    _require(
+        isinstance(commands, list)
+        and len(commands) >= 2
+        and all(
+            isinstance(command, str)
+            and str(candidate_infer) in command
+            and "--scores-json" in command
+            for command in commands
+        )
+        and any(
+            "--mode selected_with_confidence" in command
+            or "--mode selected-with-confidence" in command
+            for command in commands
+        )
+        and any(
+            "--mode all_scores" in command or "--mode all-scores" in command
+            for command in commands
+        ),
+        "final mode commands must execute candidate infer.py --scores-json for both modes",
+    )
+    environment = summary.get("environment")
+    environment_fields = (
+        "gpu",
+        "cuda",
+        "pytorch",
+        "transformers",
+        "peft",
+        "safetensors",
+        "pillow",
+    )
+    _require(
+        isinstance(environment, Mapping)
+        and all(isinstance(environment.get(key), str) and environment.get(key) for key in environment_fields),
+        "final mode execution environment is incomplete",
+    )
     float_path = Path(str(reproduction.get("reproduced_float32_path") or ""))
     selected_path = Path(str(reproduction.get("reproduced_selected_only_path") or ""))
     _require(
@@ -1749,6 +1863,10 @@ def audit_packaged_output_modes(
             "sealed_delivery_customer_ready"
         ),
         "summary_sha256": sha256_file(summary_path),
+        "candidate_infer_sha256": sha256_file(candidate_infer),
+        "reproduction_result_sha256": sha256_file(reproduction_path),
+        "commands": list(commands),
+        "environment": dict(environment),
         "selected_with_confidence_sha256": sha256_file(confidence_path),
         "all_scores_sha256": sha256_file(all_scores_path),
     }
@@ -2630,6 +2748,10 @@ def audit_delivery(
         reproduction = audit_reproduction_bundle(
             paths.posttrain_dir,
             paths.posttrain_dir.parent / "delivery_candidate",
+            evaluation_dir=paths.evaluation_dir,
+            test_rows=test_rows,
+            thresholds=thresholds,
+            schema=schema,
             expected_records=min(32, expected_test_count),
         )
         candidate_verification = _load_json(
@@ -2678,53 +2800,56 @@ def audit_delivery(
     if paths.delivery_dir is not None:
         sealed = verify_sealed_inventory(paths.delivery_dir)
         verification_path = paths.delivery_dir / "VERIFICATION.json"
-        if verification_path.is_file():
-            verification = _load_json(verification_path, name="sealed verification")
-            _require(isinstance(verification, Mapping), "sealed verification is invalid")
-            sealed_status = verification.get("status")
-            _require(
-                sealed_status in {"success", "partial"},
-                "sealed status is invalid",
-            )
-            _require(
-                not (
-                    classification["verdict"] != "success"
-                    and (
-                        sealed_status == "success"
-                        or verification.get("customer_ready") is True
-                    )
-                ),
-                "sealed delivery overclaims the independently measured performance",
-            )
-            _require(
-                sealed_status == posttrain["status"],
-                "sealed status differs from posttrain status",
-            )
-            if sealed_status == "success":
-                _require(
-                    verification.get("customer_ready") is True,
-                    "successful sealed delivery is not customer ready",
+        _require(
+            verification_path.is_file(),
+            "sealed VERIFICATION.json is missing",
+        )
+        verification = _load_json(verification_path, name="sealed verification")
+        _require(isinstance(verification, Mapping), "sealed verification is invalid")
+        sealed_status = verification.get("status")
+        _require(
+            sealed_status in {"success", "partial"},
+            "sealed status is invalid",
+        )
+        _require(
+            not (
+                classification["verdict"] != "success"
+                and (
+                    sealed_status == "success"
+                    or verification.get("customer_ready") is True
                 )
-            sealed["status"] = verification.get("status")
-            sealed["customer_ready"] = bool(verification.get("customer_ready"))
-            if packaged_output_modes["complete"]:
-                _require(
-                    packaged_output_modes.get("sealed_delivery_verification_status")
-                    == sealed["status"]
-                    and packaged_output_modes.get("sealed_delivery_customer_ready")
-                    == sealed["customer_ready"],
-                    "final mode summary differs from sealed delivery status",
-                )
-            if reproduction is not None:
-                sealed_provenance = verification.get("provenance")
-                _require(
-                    verification.get("result_sha256")
-                    == posttrain["reproduction_result_sha256"]
-                    and isinstance(sealed_provenance, Mapping)
-                    and sealed_provenance.get("weights_sha256")
-                    == reproduction["candidate_weights_sha256"],
-                    "sealed delivery reproduction or candidate binding mismatch",
-                )
+            ),
+            "sealed delivery overclaims the independently measured performance",
+        )
+        _require(
+            sealed_status == posttrain["status"],
+            "sealed status differs from posttrain status",
+        )
+        if sealed_status == "success":
+            _require(
+                verification.get("customer_ready") is True,
+                "successful sealed delivery is not customer ready",
+            )
+        sealed["status"] = verification.get("status")
+        sealed["customer_ready"] = bool(verification.get("customer_ready"))
+        if packaged_output_modes["complete"]:
+            _require(
+                packaged_output_modes.get("sealed_delivery_verification_status")
+                == sealed["status"]
+                and packaged_output_modes.get("sealed_delivery_customer_ready")
+                == sealed["customer_ready"],
+                "final mode summary differs from sealed delivery status",
+            )
+        if reproduction is not None:
+            sealed_provenance = verification.get("provenance")
+            _require(
+                verification.get("result_sha256")
+                == posttrain["reproduction_result_sha256"]
+                and isinstance(sealed_provenance, Mapping)
+                and sealed_provenance.get("weights_sha256")
+                == reproduction["candidate_weights_sha256"],
+                "sealed delivery reproduction or candidate binding mismatch",
+            )
     if classification["verdict"] == "fail" or posttrain["status"] == "fail":
         final_verdict = "fail"
     elif (
@@ -2763,7 +2888,7 @@ def audit_delivery(
         "performance_verdict": classification["verdict"],
         "customer_ready": final_verdict == "success"
         and posttrain["customer_ready"]
-        and (sealed is None or sealed.get("customer_ready", True)),
+        and (sealed is None or sealed.get("customer_ready") is True),
         "counts": {
             "validation": len(validation_rows),
             "test": len(test_rows),
@@ -2878,7 +3003,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             expected_pn_both_class_labels=args.expected_pn_both_class_labels,
             expected_dictionary_supported_labels=args.expected_dictionary_supported_labels,
         )
-    except (AuditContractError, OSError, ValueError) as exc:
+    except (AuditContractError, OSError, ValueError, TypeError, KeyError) as exc:
         failure = {
             "audit_version": "bosideng-unified57-final-audit-v1",
             "exit_code": 2,

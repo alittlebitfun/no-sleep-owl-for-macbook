@@ -462,6 +462,20 @@ def test_sealed_inventory_rejects_tampering_and_extra_files(tmp_path: Path) -> N
         verify_sealed_inventory(sealed)
 
 
+def test_delivery_audit_requires_sealed_verification_json(tmp_path: Path) -> None:
+    paths, count, dictionary_labels = _write_full_audit_fixture(tmp_path)
+    (paths.delivery_dir / "VERIFICATION.json").unlink()
+    _write_sealed_inventory(paths.delivery_dir)
+    with pytest.raises(AuditContractError, match="sealed VERIFICATION"):
+        audit_delivery(
+            paths,
+            expected_validation_count=count,
+            expected_test_count=count,
+            expected_pn_both_class_labels=1,
+            expected_dictionary_supported_labels=dictionary_labels,
+        )
+
+
 def _partial_metric_rows(schema: dict) -> list[dict]:
     hood = schema["labels"].index("连帽")
     placket = schema["labels"].index("前门襟")
@@ -698,6 +712,18 @@ def _write_full_audit_fixture(
     _write_jsonl(verification / "verification_32_manifest.jsonl", verification_manifest)
     _write_jsonl(verification / "reference_32_float32.jsonl", reference_float)
     _write_jsonl(verification / "reference_32_selected_only.jsonl", selected_rows)
+    evaluation_verification = evaluation / "verification"
+    evaluation_verification.mkdir()
+    _write_jsonl(
+        evaluation_verification / "verification_32_manifest.jsonl",
+        verification_manifest,
+    )
+    _write_jsonl(
+        evaluation_verification / "reference_32_float32.jsonl", reference_float
+    )
+    _write_jsonl(
+        evaluation_verification / "reference_32_selected_only.jsonl", selected_rows
+    )
     (candidate / "VERIFICATION.json").write_text(
         json.dumps(
             {
@@ -829,6 +855,17 @@ def _write_full_audit_fixture(
             confidence_path.read_bytes()
         ).hexdigest(),
         "all_scores_sha256": hashlib.sha256(all_scores_path.read_bytes()).hexdigest(),
+        "candidate_infer_sha256": hashlib.sha256(
+            (candidate / "infer.py").read_bytes()
+        ).hexdigest(),
+        "reproduction_result_sha256": hashlib.sha256(
+            (posttrain / "reproduction_result.json").read_bytes()
+        ).hexdigest(),
+        "commands": [
+            f"python {candidate / 'infer.py'} --scores-json scores.json --mode selected_with_confidence",
+            f"python {candidate / 'infer.py'} --scores-json scores.json --mode all_scores",
+        ],
+        "environment": reproduction["environment"],
         "sealed_delivery_verification_status": classification["verdict"],
         "sealed_delivery_customer_ready": classification["verdict"] == "success",
     }
@@ -915,6 +952,17 @@ def test_reproduction_bundle_verifies_candidate_references_and_exact_outputs(
     result = audit_reproduction_bundle(
         paths.posttrain_dir,
         paths.posttrain_dir.parent / "delivery_candidate",
+        evaluation_dir=paths.evaluation_dir,
+        test_rows=[
+            json.loads(line)
+            for line in (
+                paths.evaluation_dir / "test_predictions_float32.jsonl"
+            ).read_text().splitlines()
+        ],
+        thresholds=json.loads(
+            (paths.evaluation_dir / "thresholds.json").read_text()
+        ),
+        schema=load_schema(paths.schema),
         expected_records=min(32, count),
     )
     assert result["records"] == min(32, count)
@@ -940,7 +988,53 @@ def test_reproduction_bundle_rejects_float_score_drift(tmp_path: Path) -> None:
         audit_reproduction_bundle(
             paths.posttrain_dir,
             paths.posttrain_dir.parent / "delivery_candidate",
+            evaluation_dir=paths.evaluation_dir,
+            test_rows=[
+                json.loads(line)
+                for line in (
+                    paths.evaluation_dir / "test_predictions_float32.jsonl"
+                ).read_text().splitlines()
+            ],
+            thresholds=json.loads(
+                (paths.evaluation_dir / "thresholds.json").read_text()
+            ),
+            schema=load_schema(paths.schema),
             expected_records=min(32, count),
+        )
+
+
+def test_reproduction_bundle_rejects_self_signed_reference_drift_from_evaluation(
+    tmp_path: Path,
+) -> None:
+    paths, count, dictionary_labels = _write_full_audit_fixture(tmp_path)
+    candidate = paths.posttrain_dir.parent / "delivery_candidate"
+    reference_path = candidate / "verification" / "reference_32_float32.jsonl"
+    reference = [json.loads(line) for line in reference_path.read_text().splitlines()]
+    reference[0]["scores"][0] = 0.22
+    _write_jsonl(reference_path, reference)
+    candidate_verification_path = candidate / "VERIFICATION.json"
+    candidate_verification = json.loads(candidate_verification_path.read_text())
+    candidate_verification["references"]["reference_32_float32.jsonl"] = hashlib.sha256(
+        reference_path.read_bytes()
+    ).hexdigest()
+    candidate_verification_path.write_text(
+        json.dumps(candidate_verification), encoding="utf-8"
+    )
+    reproduced_path = paths.posttrain_dir / "reproduced_32_float32.jsonl"
+    _write_jsonl(reproduced_path, reference)
+    reproduction_path = paths.posttrain_dir / "reproduction_result.json"
+    reproduction = json.loads(reproduction_path.read_text())
+    reproduction["reproduced_float32_sha256"] = hashlib.sha256(
+        reproduced_path.read_bytes()
+    ).hexdigest()
+    reproduction_path.write_text(json.dumps(reproduction), encoding="utf-8")
+    with pytest.raises(AuditContractError, match="formal evaluation verification"):
+        audit_delivery(
+            paths,
+            expected_validation_count=count,
+            expected_test_count=count,
+            expected_pn_both_class_labels=1,
+            expected_dictionary_supported_labels=dictionary_labels,
         )
 
 
@@ -975,6 +1069,26 @@ def test_packaged_output_modes_reject_wrong_all_scores_inventory(tmp_path: Path)
         audit_packaged_output_modes(
             paths.posttrain_dir,
             schema,
+            expected_records=min(32, count),
+        )
+
+
+def test_packaged_output_modes_require_candidate_scores_json_execution_binding(
+    tmp_path: Path,
+) -> None:
+    paths, count, _dictionary_labels = _write_full_audit_fixture(tmp_path)
+    summary_path = (
+        paths.posttrain_dir
+        / "final_mode_verification"
+        / "final_mode_verification.json"
+    )
+    summary = json.loads(summary_path.read_text())
+    summary["commands"] = ["echo fabricated"]
+    summary_path.write_text(json.dumps(summary, ensure_ascii=False), encoding="utf-8")
+    with pytest.raises(AuditContractError, match="scores-json"):
+        audit_packaged_output_modes(
+            paths.posttrain_dir,
+            load_schema(paths.schema),
             expected_records=min(32, count),
         )
 
@@ -1322,3 +1436,39 @@ def test_cli_mask_integrity_error_returns_two_and_writes_diagnostics(tmp_path: P
     assert "unknown cell" in (paths.output_dir / "FINAL_REPORT.md").read_text()
     assert not (paths.output_dir / "output_modes_audit.json").exists()
     assert not (paths.output_dir / "representative_selection.jsonl").exists()
+
+
+def test_cli_type_error_in_untrusted_json_returns_two_with_diagnostics(
+    tmp_path: Path,
+) -> None:
+    paths, count, dictionary_labels = _write_full_audit_fixture(tmp_path)
+    threshold_path = paths.evaluation_dir / "thresholds.json"
+    thresholds = json.loads(threshold_path.read_text())
+    thresholds["calibration_records"] = None
+    threshold_path.write_text(json.dumps(thresholds), encoding="utf-8")
+    code = main(
+        [
+            "--schema",
+            str(paths.schema),
+            "--dataset-root",
+            str(paths.dataset_root),
+            "--evaluation-dir",
+            str(paths.evaluation_dir),
+            "--posttrain-dir",
+            str(paths.posttrain_dir),
+            "--output-dir",
+            str(paths.output_dir),
+            "--expected-validation-count",
+            str(count),
+            "--expected-test-count",
+            str(count),
+            "--expected-pn-both-class-labels",
+            "1",
+            "--expected-dictionary-supported-labels",
+            str(dictionary_labels),
+        ]
+    )
+    assert code == 2
+    audit = json.loads((paths.output_dir / "acceptance_audit.json").read_text())
+    assert audit["verdict"] == "integrity_error"
+    assert audit["exit_code"] == 2

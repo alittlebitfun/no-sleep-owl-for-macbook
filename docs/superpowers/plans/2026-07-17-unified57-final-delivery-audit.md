@@ -202,6 +202,26 @@ Run: `PYTHONPATH=. pytest -q tests/test_audit_unified57_final_delivery.py -k 'th
 
 Expected: all selected tests pass.
 
+#### Final-mode execution evidence contract
+
+`posttrain/final_mode_verification/final_mode_verification.json` must bind the
+format-only outputs to the current candidate bytes and replay result. In
+addition to the format booleans and output hashes, it must contain:
+
+- `candidate_infer_sha256`: SHA256 of `delivery_candidate/infer.py`;
+- `reproduction_result_sha256`: SHA256 of the current
+  `posttrain/reproduction_result.json`;
+- `commands`: recorded successful commands that invoke that exact candidate
+  `infer.py` through `--scores-json`, covering both
+  `--mode selected_with_confidence` and `--mode all_scores`;
+- `environment`: non-empty `gpu`, `cuda`, `pytorch`, `transformers`, `peft`,
+  `safetensors`, and `pillow` strings.
+
+The auditor also requires candidate verification references to be byte-equal
+to `evaluation/verification/`, then independently binds every selected record,
+image SHA, float32 score vector, and selected-only output to the frozen full
+test predictions. Self-signed candidate references are not an acceptance root.
+
 ### Task 4: Posttrain and sealed-inventory audit, CLI hardening, regression
 
 **Files:**
