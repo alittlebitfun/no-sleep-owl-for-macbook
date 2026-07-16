@@ -961,6 +961,14 @@ def _requirements_text(environment: Mapping[str, Any]) -> str:
         "pillow": "Pillow",
     }
     lines = []
+    pytorch_version = environment.get("pytorch")
+    if isinstance(pytorch_version, str):
+        wheel_build = re.search(r"\+(cu\d+|cpu)(?:\.|$)", pytorch_version)
+        if wheel_build:
+            lines.append(
+                "--extra-index-url "
+                f"https://download.pytorch.org/whl/{wheel_build.group(1)}"
+            )
     for source, package in names.items():
         version = environment.get(source)
         if not isinstance(version, str) or not version:
@@ -984,6 +992,10 @@ Python 3.11 and a CUDA-capable PyTorch environment are recommended.
 ```bash
 python -m pip install -r requirements.txt
 ```
+
+When the recorded PyTorch build has a `+cuNNN` or `+cpu` suffix,
+`requirements.txt` includes the matching official PyTorch wheel index. This
+keeps the copy-paste command able to resolve the exact recorded build.
 
 ## Required base model
 
@@ -1269,6 +1281,13 @@ def collect_images(inputs):
     return paths
 
 
+def should_emit_jsonl(image_inputs, verification_manifest):
+    if verification_manifest is not None:
+        return True
+    sources = list(image_inputs or [])
+    return len(sources) != 1 or Path(sources[0]).is_dir()
+
+
 def decode_resized_rgb(path, max_pixels):
     from PIL import Image
 
@@ -1467,6 +1486,7 @@ def main(argv=None):
 
         if args.device.startswith("cuda") and not torch.cuda.is_available():
             raise RuntimeError("CUDA device requested but CUDA is unavailable")
+        emit_jsonl = should_emit_jsonl(args.image, args.verification_manifest)
         manifest_rows = (
             load_jsonl(args.verification_manifest)
             if args.verification_manifest
@@ -1522,7 +1542,7 @@ def main(argv=None):
                 else:
                     row["output"] = formatted
                 rows.append(row)
-        if len(rows) == 1 and manifest_rows is None:
+        if len(rows) == 1 and not emit_jsonl:
             text = json.dumps(rows[0]["output"], ensure_ascii=False, indent=2) + "\n"
         else:
             text = "".join(json.dumps(row, ensure_ascii=False) + "\n" for row in rows)

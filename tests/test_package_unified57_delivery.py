@@ -4,6 +4,8 @@ import hashlib
 import importlib.util
 import json
 import re
+import sys
+import types
 from pathlib import Path
 
 import pytest
@@ -765,6 +767,94 @@ def test_generated_infer_cli_serializes_all_customer_modes(
         for value in outputs["all_scores"]["scores"].values()
     )
 
+    single_image = tmp_path / "single.jpg"
+    second_image = tmp_path / "second.jpg"
+    image_directory = tmp_path / "images"
+    single_image.write_bytes(b"image")
+    second_image.write_bytes(b"image")
+    image_directory.mkdir()
+    (image_directory / "only.jpg").write_bytes(b"image")
+    assert infer.should_emit_jsonl([single_image], None) is False
+    assert infer.should_emit_jsonl([image_directory], None) is True
+    assert infer.should_emit_jsonl([single_image, second_image], None) is True
+    assert infer.should_emit_jsonl(None, tmp_path / "verification.jsonl") is True
+
+
+def test_requirements_adds_the_recorded_pytorch_cuda_wheel_source() -> None:
+    requirements = delivery._requirements_text(
+        {
+            "pytorch": "2.7.1+cu126",
+            "transformers": "4.57.1",
+            "peft": "0.17.1",
+            "safetensors": "0.7.0",
+            "pillow": "12.1.1",
+        }
+    )
+
+    assert "--extra-index-url https://download.pytorch.org/whl/cu126" in requirements
+    assert "torch==2.7.1+cu126" in requirements
+
+
+def test_single_image_directory_still_uses_batch_jsonl_contract(
+    package: PackageFixture,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    infer_path = package.output / "infer.py"
+    spec = importlib.util.spec_from_file_location(
+        "generated_unified57_infer_directory", infer_path
+    )
+    assert spec is not None and spec.loader is not None
+    infer = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(infer)
+
+    class FakeProcessor:
+        @classmethod
+        def from_pretrained(cls, *_args, **_kwargs):
+            return cls()
+
+        def __call__(self, *, images, **_kwargs):
+            return {"input_ids": torch.zeros((len(images), 1), dtype=torch.long)}
+
+    class FakeModel:
+        def __call__(self, **inputs):
+            return torch.zeros((inputs["input_ids"].shape[0], 57))
+
+    fake_transformers = types.ModuleType("transformers")
+    fake_transformers.AutoProcessor = FakeProcessor
+    monkeypatch.setitem(sys.modules, "transformers", fake_transformers)
+    monkeypatch.setattr(infer, "decode_resized_rgb", lambda *_args: object())
+    monkeypatch.setattr(infer, "build_model", lambda *_args: FakeModel())
+
+    image_directory = tmp_path / "images"
+    image_directory.mkdir()
+    image_path = image_directory / "only.jpg"
+    image_path.write_bytes(b"synthetic")
+    output_path = tmp_path / "predictions.jsonl"
+
+    assert (
+        infer.main(
+            [
+                "--base-model",
+                str(tmp_path / "base"),
+                "--image",
+                str(image_directory),
+                "--mode",
+                "selected_only",
+                "--device",
+                "cpu",
+                "--output",
+                str(output_path),
+            ]
+        )
+        == 0
+    )
+    rows = output_path.read_text(encoding="utf-8").splitlines()
+    assert len(rows) == 1
+    row = json.loads(rows[0])
+    assert row["image"] == str(image_path)
+    assert list(row["output"]) == ["局部结构", "廓形", "工艺", "面辅料"]
+
 
 def test_readme_is_copy_paste_ready_for_all_customer_modes(
     package: PackageFixture,
@@ -782,6 +872,7 @@ def test_readme_is_copy_paste_ready_for_all_customer_modes(
     assert '"confidence": "0.91"' in readme
     assert '"假两件": "0.00"' in readme
     assert "JSONL" in readme
+    assert "PyTorch wheel index" in readme
 
 
 def test_generated_decode_and_single_weights_contract(
