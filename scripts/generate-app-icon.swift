@@ -26,20 +26,11 @@ guard let context = NSGraphicsContext(bitmapImageRep: bitmap) else {
 NSGraphicsContext.current = context
 context.imageInterpolation = .high
 NSColor.clear.setFill()
-NSRect(x: 0, y: 0, width: canvasSize, height: canvasSize).fill()
-
 let canvas = NSRect(x: 0, y: 0, width: canvasSize, height: canvasSize)
+canvas.fill()
 let cornerRadius = CGFloat(canvasSize) * 0.2237
 NSBezierPath(roundedRect: canvas, xRadius: cornerRadius, yRadius: cornerRadius).addClip()
-NSGradient(
-    starting: NSColor(calibratedRed: 0.035, green: 0.055, blue: 0.145, alpha: 1),
-    ending: NSColor(calibratedRed: 0.015, green: 0.025, blue: 0.085, alpha: 1)
-)!.draw(in: canvas, angle: -90)
-
-let artworkSide: CGFloat = 737
-let artworkRect = NSRect(x: (CGFloat(canvasSize) - artworkSide) / 2,
-    y: (CGFloat(canvasSize) - artworkSide) / 2, width: artworkSide, height: artworkSide)
-source.draw(in: artworkRect, from: .zero, operation: .sourceOver, fraction: 1)
+source.draw(in: canvas, from: .zero, operation: .sourceOver, fraction: 1)
 context.flushGraphics()
 NSGraphicsContext.restoreGraphicsState()
 
