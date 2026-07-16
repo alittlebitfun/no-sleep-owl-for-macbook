@@ -190,11 +190,13 @@ def test_parse_args_requires_explicit_hashes_and_two_manifests(tmp_path):
         "--expected-trainable-manifest-sha256", "f" * 64,
         "--base-artifact-manifest-sha256", "9" * 64,
         "--output-dir", str(tmp_path), "--wall-clock-seconds", "2700",
+        "--image-cache-root", "/tmp/cache",
     ]
     args = parse_args(argv)
     assert args.expected_world_size == 8
     assert args.model_config_sha256 == "e" * 64
     assert args.test_manifest_sha256 == "d" * 64
     assert args.expected_trainable_manifest_sha256 == "f" * 64
+    assert args.image_cache_root == Path("/tmp/cache")
     with pytest.raises(SystemExit):
         parse_args(["--model", "/model"])

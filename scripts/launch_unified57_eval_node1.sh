@@ -11,6 +11,8 @@ VALIDATION_MANIFEST="${VALIDATION_MANIFEST:-${DATASET_ROOT}/val.jsonl}"
 TEST_MANIFEST="${TEST_MANIFEST:-${DATASET_ROOT}/test.jsonl}"
 OUTPUT_DIR="${OUTPUT_DIR:-${RUN_DIR}/evaluation}"
 PYTHON="${PYTHON:-/maas_data/tagvlm/venv4train/bin/python}"
+IMAGE_MAX_PIXELS="${IMAGE_MAX_PIXELS:-112896}"
+IMAGE_CACHE_ROOT="${IMAGE_CACHE_ROOT:-/tmp/bosideng_unified57_eval_cache_112896}"
 
 MODEL_CONFIG_SHA256="${MODEL_CONFIG_SHA256:-5cd452860dc1e9c29dd71cc3cef7f39b338b7a40793f7a260655c2d3568f3661}"
 SCHEMA_FILE_SHA256="${SCHEMA_FILE_SHA256:-43620d06b5db44f667803038b5039732bd70140c8522e70cc04158b51aed3a9a}"
@@ -25,29 +27,43 @@ export PYTHONPATH="${PROJECT_ROOT}:${PYTHONPATH:-}"
 export TOKENIZERS_PARALLELISM=false
 export OMP_NUM_THREADS="${OMP_NUM_THREADS:-4}"
 
+evaluation_args=(
+  --model "${MODEL}"
+  --model-config-sha256 "${MODEL_CONFIG_SHA256}"
+  --schema "${SCHEMA}"
+  --schema-file-sha256 "${SCHEMA_FILE_SHA256}"
+  --checkpoint "${CHECKPOINT}"
+  --checkpoint-sha256 "${CHECKPOINT_SHA256}"
+  --validation-manifest "${VALIDATION_MANIFEST}"
+  --validation-manifest-sha256 "${VALIDATION_MANIFEST_SHA256}"
+  --test-manifest "${TEST_MANIFEST}"
+  --test-manifest-sha256 "${TEST_MANIFEST_SHA256}"
+  --expected-trainable-manifest-sha256 "${EXPECTED_TRAINABLE_MANIFEST_SHA256}"
+  --base-artifact-manifest-sha256 "${BASE_ARTIFACT_MANIFEST_SHA256}"
+  --output-dir "${OUTPUT_DIR}"
+  --wall-clock-seconds "${WALL_CLOCK_SECONDS:-2700}"
+  --expected-world-size 8
+  --batch-size "${BATCH_SIZE:-8}"
+  --num-workers "${NUM_WORKERS:-4}"
+  --image-max-pixels "${IMAGE_MAX_PIXELS}"
+  --lora-rank 16
+  --lora-alpha 32
+  --lora-dropout 0.05
+  --head-dropout 0.1
+)
+if [[ -f "${IMAGE_CACHE_ROOT}/complete.json" ]]; then
+  "${PYTHON}" "${PROJECT_ROOT}/scripts/build_unified57_eval_image_cache.py" validate \
+    --validation-manifest "${VALIDATION_MANIFEST}" \
+    --test-manifest "${TEST_MANIFEST}" \
+    --validation-manifest-sha256 "${VALIDATION_MANIFEST_SHA256}" \
+    --test-manifest-sha256 "${TEST_MANIFEST_SHA256}" \
+    --cache-root "${IMAGE_CACHE_ROOT}" \
+    --image-max-pixels "${IMAGE_MAX_PIXELS}"
+  evaluation_args+=(--image-cache-root "${IMAGE_CACHE_ROOT}")
+fi
+
 exec "${PYTHON}" -m torch.distributed.run \
   --standalone \
   --nproc_per_node=8 \
   "${PROJECT_ROOT}/scripts/evaluate_unified57_multilabel.py" \
-  --model "${MODEL}" \
-  --model-config-sha256 "${MODEL_CONFIG_SHA256}" \
-  --schema "${SCHEMA}" \
-  --schema-file-sha256 "${SCHEMA_FILE_SHA256}" \
-  --checkpoint "${CHECKPOINT}" \
-  --checkpoint-sha256 "${CHECKPOINT_SHA256}" \
-  --validation-manifest "${VALIDATION_MANIFEST}" \
-  --validation-manifest-sha256 "${VALIDATION_MANIFEST_SHA256}" \
-  --test-manifest "${TEST_MANIFEST}" \
-  --test-manifest-sha256 "${TEST_MANIFEST_SHA256}" \
-  --expected-trainable-manifest-sha256 "${EXPECTED_TRAINABLE_MANIFEST_SHA256}" \
-  --base-artifact-manifest-sha256 "${BASE_ARTIFACT_MANIFEST_SHA256}" \
-  --output-dir "${OUTPUT_DIR}" \
-  --wall-clock-seconds "${WALL_CLOCK_SECONDS:-2700}" \
-  --expected-world-size 8 \
-  --batch-size "${BATCH_SIZE:-8}" \
-  --num-workers "${NUM_WORKERS:-4}" \
-  --image-max-pixels "${IMAGE_MAX_PIXELS:-112896}" \
-  --lora-rank 16 \
-  --lora-alpha 32 \
-  --lora-dropout 0.05 \
-  --head-dropout 0.1
+  "${evaluation_args[@]}"

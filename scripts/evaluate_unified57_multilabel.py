@@ -56,6 +56,17 @@ except ModuleNotFoundError:  # direct invocation from scripts/
         validate_selected_with_confidence,
     )
 
+try:
+    from scripts.build_unified57_eval_image_cache import (
+        load_validated_cache_overlay,
+        training_vision_prompt,
+    )
+except ModuleNotFoundError:  # direct invocation from scripts/
+    from build_unified57_eval_image_cache import (  # type: ignore
+        load_validated_cache_overlay,
+        training_vision_prompt,
+    )
+
 
 REPORT_VERSION = "bosideng-unified57-ddp-evaluation-v1"
 DEFAULT_IMAGE_MAX_PIXELS = 336 * 336
@@ -601,48 +612,80 @@ def write_delivery_outputs(
 
 
 class EvaluationCollator:
-    def __init__(self, processor: Any, manifest_parent: Path, image_max_pixels: int) -> None:
+    def __init__(
+        self,
+        processor: Any,
+        manifest_parent: Path,
+        image_max_pixels: int,
+        *,
+        image_cache: Mapping[str, Mapping[str, Any]] | None = None,
+        split: str | None = None,
+    ) -> None:
         self.processor = processor
         self.manifest_parent = manifest_parent
         self.image_max_pixels = image_max_pixels
+        self.image_cache = image_cache
+        self.split = split
 
     def __call__(self, records: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
         from PIL import Image
 
-        try:
-            from scripts.train_unified57_qwen3vl_multilabel import (
-                VISION_PROMPT,
-                _open_training_image,
-            )
-        except ModuleNotFoundError:
-            from train_unified57_qwen3vl_multilabel import (  # type: ignore
-                VISION_PROMPT,
-                _open_training_image,
-            )
         metadata_rows: list[dict[str, Any]] = []
         images = []
         for record in records:
             enriched = dict(record)
-            image_value = record.get("image_path") or record.get("local_image_path")
-            if image_value:
-                image_path = Path(str(image_value))
-                if not image_path.is_absolute():
-                    image_path = self.manifest_parent / image_path
-                with Image.open(image_path) as source:
-                    width, height = source.size
-                enriched["width"] = int(width)
-                enriched["height"] = int(height)
-                enriched["aspect_ratio"] = float(width) / float(height) if height else None
-            image = _open_training_image(record, self.manifest_parent, self.image_max_pixels)
-            if "width" not in enriched:
-                enriched["width"] = int(image.width)
-                enriched["height"] = int(image.height)
-                enriched["aspect_ratio"] = float(image.width) / float(image.height) if image.height else None
+            record_id = str(record.get("record_id") or "")
+            cached = (
+                self.image_cache.get(record_id)
+                if self.image_cache is not None
+                else None
+            )
+            if self.image_cache is not None and cached is None:
+                raise ValueError(f"cache entry missing for {record_id}")
+            if cached is not None:
+                if self.split is not None and cached.get("split") != self.split:
+                    raise ValueError(f"cache split mismatch for {record_id}")
+                width = int(cached["original_width"])
+                height = int(cached["original_height"])
+                with Image.open(Path(str(cached["cache_path"]))) as source:
+                    expected_cached_size = (
+                        int(cached["cached_width"]),
+                        int(cached["cached_height"]),
+                    )
+                    if source.mode != "RGB" or source.size != expected_cached_size:
+                        raise ValueError(f"cache pixel contract mismatch for {record_id}")
+                    image = source.convert("RGB")
+            else:
+                try:
+                    from scripts.train_unified57_qwen3vl_multilabel import (
+                        _open_training_image,
+                    )
+                except ModuleNotFoundError:
+                    from train_unified57_qwen3vl_multilabel import (  # type: ignore
+                        _open_training_image,
+                    )
+                image_value = record.get("image_path") or record.get("local_image_path")
+                if image_value:
+                    image_path = Path(str(image_value))
+                    if not image_path.is_absolute():
+                        image_path = self.manifest_parent / image_path
+                    with Image.open(image_path) as source:
+                        width, height = source.size
+                image = _open_training_image(
+                    record, self.manifest_parent, self.image_max_pixels
+                )
+                if not image_value:
+                    width, height = image.size
+            enriched["width"] = int(width)
+            enriched["height"] = int(height)
+            enriched["aspect_ratio"] = (
+                float(width) / float(height) if height else None
+            )
             metadata_rows.append(enriched)
             images.append(image)
         batch = self.processor(
             images=images,
-            text=[VISION_PROMPT] * len(records),
+            text=[training_vision_prompt()] * len(records),
             padding=True,
             return_tensors="pt",
         )
@@ -689,6 +732,8 @@ def predict_split(
     num_workers: int,
     image_max_pixels: int,
     deadline_monotonic: float,
+    image_cache: Mapping[str, Mapping[str, Any]] | None = None,
+    image_cache_provenance: Mapping[str, Any] | None = None,
 ) -> tuple[list[dict[str, Any]] | None, bool]:
     import torch
     import torch.distributed as dist
@@ -702,6 +747,21 @@ def predict_split(
         "checkpoint_sha256": checkpoint_sha256,
         "manifest_sha256": manifest_sha256,
         "schema_sha256": schema["schema_sha256"],
+        "image_cache_manifest_sha256": (
+            image_cache_provenance.get("cache_manifest_sha256")
+            if image_cache_provenance
+            else None
+        ),
+        "image_cache_complete_marker_sha256": (
+            image_cache_provenance.get("complete_marker_sha256")
+            if image_cache_provenance
+            else None
+        ),
+        "image_cache_decoder_contract_sha256": (
+            image_cache_provenance.get("decoder_contract_sha256")
+            if image_cache_provenance
+            else None
+        ),
     }
     shard = BufferedPredictionShard(
         _shard_path(output_dir, split, rank, world_size),
@@ -721,7 +781,13 @@ def predict_split(
         num_workers=num_workers,
         pin_memory=True,
         persistent_workers=num_workers > 0,
-        collate_fn=EvaluationCollator(processor, manifest_path.parent, image_max_pixels),
+        collate_fn=EvaluationCollator(
+            processor,
+            manifest_path.parent,
+            image_max_pixels,
+            image_cache=image_cache,
+            split=split,
+        ),
     )
     complete = True
     model.eval()
@@ -801,6 +867,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--batch-size", type=int, default=8)
     parser.add_argument("--num-workers", type=int, default=4)
     parser.add_argument("--image-max-pixels", type=int, default=DEFAULT_IMAGE_MAX_PIXELS)
+    parser.add_argument("--image-cache-root", type=Path)
     parser.add_argument("--lora-rank", type=int, default=16)
     parser.add_argument("--lora-alpha", type=int, default=32)
     parser.add_argument("--lora-dropout", type=float, default=0.05)
@@ -825,6 +892,47 @@ def main(argv: Sequence[str] | None = None) -> int:
     started_wall = time.time()
     started_mono = time.monotonic()
     deadline = started_mono + args.wall_clock_seconds
+
+    # Every file/cache contract is checked before NCCL, model loading, or CUDA
+    # allocation. A requested cache therefore fails closed without stranding
+    # distributed workers or partially loading the model.
+    verify_file_sha256(
+        Path(args.model) / "config.json",
+        args.model_config_sha256,
+        "model config",
+    )
+    schema = load_schema(args.schema, args.schema_file_sha256)
+    checkpoint_sha = verify_file_sha256(
+        args.checkpoint, args.checkpoint_sha256, "checkpoint"
+    )
+    validation_rows = load_manifest(
+        args.validation_manifest,
+        schema,
+        expected_sha256=args.validation_manifest_sha256,
+    )
+    test_rows = load_manifest(
+        args.test_manifest,
+        schema,
+        expected_sha256=args.test_manifest_sha256,
+    )
+    image_cache: dict[str, dict[str, Any]] | None = None
+    image_cache_provenance: dict[str, Any] | None = None
+    if args.image_cache_root is not None:
+        image_cache, image_cache_provenance = load_validated_cache_overlay(
+            cache_root=args.image_cache_root,
+            validation_rows=validation_rows,
+            test_rows=test_rows,
+            validation_manifest_sha256=args.validation_manifest_sha256,
+            test_manifest_sha256=args.test_manifest_sha256,
+            image_max_pixels=args.image_max_pixels,
+        )
+        image_cache_provenance = {
+            **image_cache_provenance,
+            "enabled": True,
+            "cache_root": str(args.image_cache_root),
+        }
+    args.output_dir.mkdir(parents=True, exist_ok=True)
+
     local_rank, rank, world_size, device = setup_distributed(args.expected_world_size)
 
     import torch
@@ -832,21 +940,6 @@ def main(argv: Sequence[str] | None = None) -> int:
     from transformers import AutoProcessor
 
     try:
-        verify_file_sha256(Path(args.model) / "config.json", args.model_config_sha256, "model config")
-        schema = load_schema(args.schema, args.schema_file_sha256)
-        checkpoint_sha = verify_file_sha256(
-            args.checkpoint, args.checkpoint_sha256, "checkpoint"
-        )
-        validation_rows = load_manifest(
-            args.validation_manifest,
-            schema,
-            expected_sha256=args.validation_manifest_sha256,
-        )
-        test_rows = load_manifest(
-            args.test_manifest, schema, expected_sha256=args.test_manifest_sha256
-        )
-        args.output_dir.mkdir(parents=True, exist_ok=True)
-
         try:
             from scripts.jd_multilabel_training_core import load_qwen3vl_classifier
             from scripts.train_unified57_qwen3vl_multilabel import (
@@ -894,6 +987,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             num_workers=args.num_workers,
             image_max_pixels=args.image_max_pixels,
             deadline_monotonic=deadline,
+            image_cache=image_cache,
+            image_cache_provenance=image_cache_provenance,
         )
         if not validation_complete:
             if rank == 0:
@@ -940,6 +1035,21 @@ def main(argv: Sequence[str] | None = None) -> int:
             "schema_sha256": schema["schema_sha256"],
             "trainable_manifest_sha256": args.expected_trainable_manifest_sha256,
             "base_artifact_manifest_sha256": args.base_artifact_manifest_sha256,
+            "image_cache_manifest_sha256": (
+                image_cache_provenance.get("cache_manifest_sha256")
+                if image_cache_provenance
+                else None
+            ),
+            "image_cache_complete_marker_sha256": (
+                image_cache_provenance.get("complete_marker_sha256")
+                if image_cache_provenance
+                else None
+            ),
+            "image_cache_decoder_contract_sha256": (
+                image_cache_provenance.get("decoder_contract_sha256")
+                if image_cache_provenance
+                else None
+            ),
         }
         if rank == 0:
             _freeze_test_contract(args.output_dir / "test_run_contract.json", contract)
@@ -961,6 +1071,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             num_workers=args.num_workers,
             image_max_pixels=args.image_max_pixels,
             deadline_monotonic=deadline,
+            image_cache=image_cache,
+            image_cache_provenance=image_cache_provenance,
         )
         verify_file_sha256(
             args.output_dir / "thresholds.json", threshold_sha, "threshold file after test"
@@ -1020,6 +1132,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                     args.output_dir / "test_predictions_float32.jsonl"
                 ),
                 "thresholds_sha256": threshold_sha,
+                "image_cache": image_cache_provenance or {"enabled": False},
             }
             report = {
                 "report_version": REPORT_VERSION,
@@ -1038,6 +1151,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                     "deadline_reached": time.monotonic() >= deadline,
                 },
                 "environment": environment,
+                "image_cache": image_cache_provenance or {"enabled": False},
                 "thresholds": thresholds,
                 "raw_thresholded": (
                     delivery["metrics"]["raw_thresholded"] if delivery else None
