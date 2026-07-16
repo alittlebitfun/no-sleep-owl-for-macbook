@@ -198,5 +198,9 @@ def test_parse_args_requires_explicit_hashes_and_two_manifests(tmp_path):
     assert args.test_manifest_sha256 == "d" * 64
     assert args.expected_trainable_manifest_sha256 == "f" * 64
     assert args.image_cache_root == Path("/tmp/cache")
+    assert args.prediction_only_split is None
+
+    test_only = parse_args([*argv, "--prediction-only-split", "test"])
+    assert test_only.prediction_only_split == "test"
     with pytest.raises(SystemExit):
         parse_args(["--model", "/model"])

@@ -868,6 +868,15 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--num-workers", type=int, default=4)
     parser.add_argument("--image-max-pixels", type=int, default=DEFAULT_IMAGE_MAX_PIXELS)
     parser.add_argument("--image-cache-root", type=Path)
+    parser.add_argument(
+        "--prediction-only-split",
+        choices=("validation", "test"),
+        help=(
+            "Run only the requested raw-score inference split. This is used to "
+            "prefetch test scores in parallel with validation; it never calibrates "
+            "thresholds or publishes delivery metrics."
+        ),
+    )
     parser.add_argument("--lora-rank", type=int, default=16)
     parser.add_argument("--lora-alpha", type=int, default=32)
     parser.add_argument("--lora-dropout", type=float, default=0.05)
@@ -969,6 +978,61 @@ def main(argv: Sequence[str] | None = None) -> int:
             expected_schema_sha256=schema["schema_sha256"],
         )
         model.to(device).eval()
+
+        if args.prediction_only_split is not None:
+            split = str(args.prediction_only_split)
+            if split == "validation":
+                prediction_rows = validation_rows
+                prediction_manifest = args.validation_manifest
+                prediction_manifest_sha256 = args.validation_manifest_sha256
+            else:
+                prediction_rows = test_rows
+                prediction_manifest = args.test_manifest
+                prediction_manifest_sha256 = args.test_manifest_sha256
+            predictions, prediction_complete = predict_split(
+                split=split,
+                records=prediction_rows,
+                manifest_path=prediction_manifest,
+                manifest_sha256=prediction_manifest_sha256,
+                model=model,
+                processor=processor,
+                device=device,
+                rank=rank,
+                world_size=world_size,
+                output_dir=args.output_dir,
+                checkpoint_sha256=checkpoint_sha,
+                schema=schema,
+                batch_size=args.batch_size,
+                num_workers=args.num_workers,
+                image_max_pixels=args.image_max_pixels,
+                deadline_monotonic=deadline,
+                image_cache=image_cache,
+                image_cache_provenance=image_cache_provenance,
+            )
+            if rank == 0:
+                _atomic_json(
+                    {
+                        "report_version": REPORT_VERSION,
+                        "mode": "prediction_only",
+                        "split": split,
+                        "state": "complete" if prediction_complete else "partial",
+                        "expected_records": len(prediction_rows),
+                        "predicted_records": len(predictions or []),
+                        "checkpoint_sha256": checkpoint_sha,
+                        "manifest_sha256": prediction_manifest_sha256,
+                        "schema_sha256": schema["schema_sha256"],
+                        "world_size": world_size,
+                        "batch_size": args.batch_size,
+                        "elapsed_seconds": time.monotonic() - started_mono,
+                        "image_cache": image_cache_provenance or {"enabled": False},
+                    },
+                    args.output_dir / "prediction_only_report.json",
+                )
+            dist.barrier()
+            dist.destroy_process_group()
+            del model
+            torch.cuda.empty_cache()
+            return 0 if prediction_complete else 75
 
         validation_predictions, validation_complete = predict_split(
             split="validation",
