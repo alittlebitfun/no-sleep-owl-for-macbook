@@ -52,23 +52,25 @@ final class ThermalStatusView: NSView {
 
     required init?(coder: NSCoder) { nil }
 
-    func update(snapshot: ThermalAppSnapshot?) {
+    func update(snapshot: ThermalAppSnapshot?, mode: MonitoringDisplayMode = .full, strings: AppStrings = AppStrings(language: .zhHans)) {
         rows.arrangedSubviews.forEach { $0.removeFromSuperview() }
         guard let snapshot else {
-            titleLabel.stringValue = "电脑状态 · 正在检查"
-            detailLabel.stringValue = "正在获取应用占用"
-            rows.addArrangedSubview(NSTextField(labelWithString: "首次采样约需 10 秒"))
+            titleLabel.stringValue = mode == .applicationsOnly ? strings.applicationUsageTitle : strings.monitoringCheckingTitle
+            detailLabel.stringValue = strings.fetchingUsage
+            rows.addArrangedSubview(NSTextField(labelWithString: strings.firstSample))
             layoutRows()
             return
         }
-        let presentation = ThermalPresentation(state: snapshot.thermalState)
-        titleLabel.stringValue = "电脑状态 · \(presentation.title)"
-        detailLabel.stringValue = presentation.detail
+        let presentation = ThermalPresentation(state: snapshot.thermalState, language: strings.language)
+        titleLabel.stringValue = mode == .applicationsOnly ? strings.applicationUsageTitle : strings.monitoringTitle(presentation.title)
+        detailLabel.stringValue = mode == .applicationsOnly ? strings.fetchingUsage : presentation.detail
+        detailLabel.isHidden = mode == .applicationsOnly
+        scrollView.isHidden = mode == .thermalOnly
         titleLabel.textColor = color(for: snapshot.thermalState)
         if snapshot.applications.isEmpty {
-            rows.addArrangedSubview(NSTextField(labelWithString: "暂未发现明显 CPU 占用"))
+            rows.addArrangedSubview(NSTextField(labelWithString: strings.noSignificantUsage))
         } else {
-            snapshot.applications.forEach { rows.addArrangedSubview(applicationRow($0)) }
+            snapshot.applications.forEach { rows.addArrangedSubview(applicationRow($0, strings: strings)) }
         }
         layoutRows()
     }
@@ -83,7 +85,7 @@ final class ThermalStatusView: NSView {
         )
     }
 
-    private func applicationRow(_ app: MonitoredApplication) -> NSView {
+    private func applicationRow(_ app: MonitoredApplication, strings: AppStrings) -> NSView {
         let icon = NSImageView(image: app.icon ?? NSImage(systemSymbolName: "app", accessibilityDescription: nil)!)
         icon.imageScaling = .scaleProportionallyUpOrDown
         icon.translatesAutoresizingMaskIntoConstraints = false
@@ -103,7 +105,7 @@ final class ThermalStatusView: NSView {
         row.spacing = 8
         name.widthAnchor.constraint(equalToConstant: 190).isActive = true
         if app.usage.canTerminate {
-            let button = NSButton(title: "退出", target: self, action: #selector(terminate(_:)))
+            let button = NSButton(title: strings.terminate, target: self, action: #selector(terminate(_:)))
             button.bezelStyle = .rounded
             button.controlSize = .small
             button.tag = Int(app.usage.pid)

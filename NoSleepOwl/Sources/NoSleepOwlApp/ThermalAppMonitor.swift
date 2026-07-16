@@ -16,6 +16,7 @@ final class ThermalAppMonitor {
     private var notificationGate = ThermalNotificationGate()
     private var timer: Timer?
     private var isWindowVisible = false
+    private var preferences = AppPreferenceSnapshot(language: .zhHans, showsThermalStatus: true, showsHighUsageApps: true)
 
     private(set) var latestSnapshot: ThermalAppSnapshot?
     var onChange: (() -> Void)?
@@ -29,7 +30,7 @@ final class ThermalAppMonitor {
 
     func evaluate(now: Date = Date()) {
         let state = currentThermalState()
-        let sampled = sampler.sample(now: now)
+        let sampled = MonitoringSamplingPolicy.samplesApplications(showsHighUsageApps: preferences.showsHighUsageApps) ? sampler.sample(now: now) : []
         let ranked = highUsageTracker.evaluate(sampled.map(\.usage))
         let byPID = Dictionary(uniqueKeysWithValues: sampled.map { ($0.usage.pid, $0) })
         let applications = ranked.compactMap { usage -> MonitoredApplication? in
@@ -43,6 +44,12 @@ final class ThermalAppMonitor {
         }
         onChange?()
         scheduleNext(for: state)
+    }
+
+    func configure(_ value: AppPreferenceSnapshot) {
+        let shouldEvaluate = !preferences.showsHighUsageApps && value.showsHighUsageApps
+        preferences = value
+        if shouldEvaluate { evaluate() }
     }
 
     func setWindowVisible(_ visible: Bool) {
@@ -76,11 +83,12 @@ final class ThermalAppMonitor {
 
     private func sendThermalNotification(state: OwlThermalState, applications: [MonitoredApplication]) {
         let content = UNMutableNotificationContent()
-        content.title = state == .critical ? "Mac 热状态危急" : "Mac 温度压力较高"
+        let strings = AppStrings(language: preferences.language)
+        content.title = state == .critical ? strings.thermalNotificationCritical : strings.thermalNotificationSerious
         if let top = applications.first {
-            content.body = "\(top.usage.name) 当前占用约 \(CPUUsageFormatter.string(top.usage.cpuPercent))，请检查通风和运行任务。"
+            content.body = strings.highUsageNotification(app: top.usage.name, cpu: CPUUsageFormatter.string(top.usage.cpuPercent))
         } else {
-            content.body = "请改善通风并检查正在运行的应用。"
+            content.body = strings.improveVentilation
         }
         content.sound = .default
         UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: "NoSleepOwl.thermal", content: content, trigger: nil))

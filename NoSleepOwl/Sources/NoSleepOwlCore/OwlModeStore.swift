@@ -15,6 +15,7 @@ public final class OwlModeStore {
     private let controller: SleepAssertionControlling
     private let now: () -> Date
     private var assertionID: UInt32?
+    private var language: AppLanguage = .zhHans
 
     public init(
         controller: SleepAssertionControlling,
@@ -33,7 +34,7 @@ public final class OwlModeStore {
                 startedAt = now()
                 mode = .owl
             } catch {
-                errorMessage = error.localizedDescription
+                errorMessage = language == .en ? "Could not enable owl mode. Please try again." : error.localizedDescription
             }
         case .owl:
             guard let assertionID else { return }
@@ -43,11 +44,13 @@ public final class OwlModeStore {
                 startedAt = nil
                 mode = .bird
             } catch {
-                errorMessage = "未能恢复休息，请再试一次。"
+                errorMessage = language == .en ? "Could not restore sleep. Please try again." : "未能恢复休息，请再试一次。"
             }
         }
         onChange?()
     }
+
+    public func setLanguage(_ value: AppLanguage) { language = value; onChange?() }
 
     public func setMessage(_ message: String?) {
         errorMessage = message
@@ -63,7 +66,7 @@ public final class OwlModeStore {
             mode = .bird
             errorMessage = nil
         } catch {
-            errorMessage = "退出前未能释放休眠控制。"
+            errorMessage = language == .en ? "Could not release sleep control before quitting." : "退出前未能释放休眠控制。"
         }
         onChange?()
     }

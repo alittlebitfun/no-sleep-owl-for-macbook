@@ -5,6 +5,7 @@ import NoSleepOwlCore
 @MainActor
 final class SafetyMonitor {
     private let store: OwlModeStore
+    private let preferences: AppPreferences
     private var policyEngine = SafetyPolicy()
     private var timer: Timer?
 
@@ -13,7 +14,7 @@ final class SafetyMonitor {
         set { UserDefaults.standard.set(newValue.rawValue, forKey: "powerPolicy") }
     }
 
-    init(store: OwlModeStore) { self.store = store }
+    init(store: OwlModeStore, preferences: AppPreferences) { self.store = store; self.preferences = preferences }
 
     func start() {
         timer = Timer.scheduledTimer(withTimeInterval: 10, repeats: true) { [weak self] _ in
@@ -31,21 +32,22 @@ final class SafetyMonitor {
         case .critical: .critical
         @unknown default: .fair
         }
+        let strings = AppStrings(language: preferences.snapshot.language)
         switch policyEngine.evaluate(SafetySnapshot(policy: powerPolicy, isOnACPower: power.ac, batteryPercent: power.percent, thermalState: thermal)) {
         case .none: break
-        case .warn(.lowBattery): store.setMessage("电量已降至 20%，建议接通电源。")
-        case .warn(.thermalSerious): store.setMessage("Mac 温度压力较高，请改善通风。")
+        case .warn(.lowBattery): store.setMessage(strings.lowBatteryWarning)
+        case .warn(.thermalSerious): store.setMessage(strings.thermalWarning)
         case .exitOwl(let reason):
             store.toggle()
-            store.setMessage(message(for: reason))
+            store.setMessage(message(for: reason, strings: strings))
         }
     }
 
-    private func message(for reason: SafetyExitReason) -> String {
+    private func message(for reason: SafetyExitReason, strings: AppStrings) -> String {
         switch reason {
-        case .powerDisconnected: "电源已断开，已按安全策略恢复小鸟模式。"
-        case .criticalBattery: "电量低于 10%，已自动恢复小鸟模式。"
-        case .thermalCritical: "系统热状态危急，已自动恢复小鸟模式。"
+        case .powerDisconnected: strings.powerDisconnected
+        case .criticalBattery: strings.criticalBattery
+        case .thermalCritical: strings.thermalCritical
         }
     }
 

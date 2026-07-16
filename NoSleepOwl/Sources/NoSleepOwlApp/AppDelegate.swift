@@ -4,20 +4,25 @@ import NoSleepOwlCore
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private let sleepController = PrivilegedSleepController()
+    private let preferences = AppPreferences()
     private lazy var store = OwlModeStore(controller: sleepController)
-    private lazy var safetyMonitor = SafetyMonitor(store: store)
+    private lazy var safetyMonitor = SafetyMonitor(store: store, preferences: preferences)
     private lazy var thermalMonitor = ThermalAppMonitor()
     private var statusController: StatusItemController!
     private var windowController: ControlWindowController!
+    private var settingsController: SettingsWindowController!
     private let launchController = LaunchAtLoginController()
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        windowController = ControlWindowController(store: store, launchController: launchController, sleepController: sleepController, safetyMonitor: safetyMonitor, thermalMonitor: thermalMonitor)
+        settingsController = SettingsWindowController(preferences: preferences)
+        windowController = ControlWindowController(store: store, launchController: launchController, sleepController: sleepController, safetyMonitor: safetyMonitor, thermalMonitor: thermalMonitor, preferences: preferences)
         statusController = StatusItemController(
             store: store,
             launchController: launchController,
             thermalMonitor: thermalMonitor,
+            preferences: preferences,
             openWindow: { [weak self] in self?.windowController.show() },
+            openSettings: { [weak self] in self?.settingsController.show() },
             quit: { NSApplication.shared.terminate(nil) }
         )
         store.onChange = { [weak self] in
@@ -28,6 +33,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self?.windowController.refresh()
             self?.statusController.refresh()
         }
+        preferences.onChange = { [weak self] in
+            guard let self else { return }
+            thermalMonitor.configure(preferences.snapshot)
+            store.setLanguage(preferences.snapshot.language)
+            windowController.refresh()
+            settingsController.refresh()
+            statusController.refresh()
+        }
+        store.setLanguage(preferences.snapshot.language)
+        thermalMonitor.configure(preferences.snapshot)
         if ProcessInfo.processInfo.arguments.contains("--open-window") {
             windowController.show()
         }

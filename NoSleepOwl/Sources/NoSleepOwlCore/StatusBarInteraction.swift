@@ -21,3 +21,7 @@ public enum StatusItemPlacementPolicy {
     public static let usesFloatingOverlay = false
     public static let persistsCustomPosition = true
 }
+
+public enum StatusMenuPolicy {
+    public static let includesSettings = true
+}

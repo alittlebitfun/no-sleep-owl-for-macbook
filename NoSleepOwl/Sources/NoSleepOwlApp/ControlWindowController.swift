@@ -8,6 +8,7 @@ final class ControlWindowController: NSObject, NSWindowDelegate {
     private let sleepController: PrivilegedSleepController
     private let safetyMonitor: SafetyMonitor
     private let thermalMonitor: ThermalAppMonitor
+    private let preferences: AppPreferences
     private let window: NSWindow
     private let emoji = NSTextField(labelWithString: "")
     private let titleLabel = NSTextField(labelWithString: "")
@@ -22,12 +23,13 @@ final class ControlWindowController: NSObject, NSWindowDelegate {
     private let thermalView = ThermalStatusView()
     private var timer: Timer?
 
-    init(store: OwlModeStore, launchController: LaunchAtLoginController, sleepController: PrivilegedSleepController, safetyMonitor: SafetyMonitor, thermalMonitor: ThermalAppMonitor) {
+    init(store: OwlModeStore, launchController: LaunchAtLoginController, sleepController: PrivilegedSleepController, safetyMonitor: SafetyMonitor, thermalMonitor: ThermalAppMonitor, preferences: AppPreferences) {
         self.store = store
         self.launchController = launchController
         self.sleepController = sleepController
         self.safetyMonitor = safetyMonitor
         self.thermalMonitor = thermalMonitor
+        self.preferences = preferences
         window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 480, height: 760), styleMask: [.titled, .closable, .miniaturizable], backing: .buffered, defer: false)
         super.init()
         window.title = "不休眠猫头鹰"
@@ -46,17 +48,25 @@ final class ControlWindowController: NSObject, NSWindowDelegate {
     }
 
     func refresh() {
-        let p = BirdPresentation(mode: store.mode)
+        let snapshot = preferences.snapshot
+        let strings = AppStrings(language: snapshot.language)
+        let p = BirdPresentation(mode: store.mode, language: snapshot.language)
+        window.title = strings.appName
         emoji.stringValue = p.emoji
         titleLabel.stringValue = p.statusTitle
         detailLabel.stringValue = p.detail
         toggleButton.title = p.toggleTitle
         errorLabel.stringValue = store.errorMessage ?? ""
+        loginButton.title = strings.loginAtStartup
         loginButton.state = launchController.isEnabled ? .on : .off
+        batteryButton.title = strings.allowBattery
         batteryButton.state = safetyMonitor.powerPolicy == .allowBattery ? .on : .off
-        helperLabel.stringValue = sleepController.statusText
+        helperLabel.stringValue = sleepController.statusText(language: snapshot.language)
+        helperButton.title = strings.installHelper
         helperButton.isHidden = sleepController.isReady
-        thermalView.update(snapshot: thermalMonitor.latestSnapshot)
+        let mode = MonitoringDisplayPolicy.mode(thermal: snapshot.showsThermalStatus, applications: snapshot.showsHighUsageApps)
+        thermalView.isHidden = mode == .hidden
+        thermalView.update(snapshot: thermalMonitor.latestSnapshot, mode: mode, strings: strings)
         updateDuration()
     }
 
@@ -120,14 +130,14 @@ final class ControlWindowController: NSObject, NSWindowDelegate {
 
     private func updateDuration() {
         if let startedAt = store.startedAt {
-            durationLabel.stringValue = "已守夜  \(OwlDurationFormatter.string(seconds: Date().timeIntervalSince(startedAt)))"
-        } else { durationLabel.stringValue = "尚未开始守夜" }
+            durationLabel.stringValue = AppStrings(language: preferences.snapshot.language).duration(Date().timeIntervalSince(startedAt))
+        } else { durationLabel.stringValue = AppStrings(language: preferences.snapshot.language).notWatching }
     }
 
     @objc private func toggleMode() { store.toggle() }
     @objc private func toggleLogin() {
         do { try launchController.setEnabled(loginButton.state == .on) }
-        catch { errorLabel.stringValue = "未能修改登录启动设置。" }
+        catch { errorLabel.stringValue = AppStrings(language: preferences.snapshot.language).loginChangeFailed }
         loginButton.state = launchController.isEnabled ? .on : .off
     }
 
@@ -137,8 +147,9 @@ final class ControlWindowController: NSObject, NSWindowDelegate {
     }
 
     @objc private func registerHelper() {
-        do { try sleepController.register(); store.setMessage("辅助程序已准备好。") }
-        catch { store.setMessage(error.localizedDescription) }
+        let strings = AppStrings(language: preferences.snapshot.language)
+        do { try sleepController.register(); store.setMessage(strings.helperReady) }
+        catch { store.setMessage(strings.helperRequestFailed(error.localizedDescription)) }
         refresh()
     }
 }
