@@ -9,7 +9,7 @@ TRAIN_MANIFEST="${TRAIN_MANIFEST:-/maas_data/datasets/bosideng/bosideng_unified5
 SCHEMA_PATH="${SCHEMA_PATH:-${PROJECT_ROOT}/configs/bosideng_unified57_schema.json}"
 MODEL_PATH="${MODEL_PATH:-/maas_data/tagvlm/Qwen3-VL-8B-Instruct}"
 AGGREGATE18_CHECKPOINT="${AGGREGATE18_CHECKPOINT:-/maas_data/artifacts/bosideng-model-lab/jd_aggregate18/runs/aggregate18_h2_20260715_0315/checkpoints/latest.pt}"
-AGGREGATE18_CONFIG="${AGGREGATE18_CONFIG:-${PROJECT_ROOT}/jd_multilabel_31/delivery/bosideng_jd_aggregate18_lora_step751/model_config.json}"
+AGGREGATE18_CONFIG="${AGGREGATE18_CONFIG:-/maas_data/artifacts/bosideng-model-lab/unified57_20260717/jd_multilabel_31/delivery/bosideng_jd_aggregate18_lora_step751/model_config.json}"
 RUN_ROOT="${RUN_ROOT:-/maas_data/artifacts/bosideng-model-lab/unified57/runs}"
 RUN_ID="${RUN_ID:-unified57_smoke_$(date -u +%Y%m%dT%H%M%SZ)}"
 RUN_DIR="${RUN_DIR:-${RUN_ROOT}/${RUN_ID}}"
@@ -99,13 +99,23 @@ run_worker() {
 
   printf '%q ' "${command[@]}" > "${RUN_DIR}/resolved_command.txt"
   printf '\n' >> "${RUN_DIR}/resolved_command.txt"
+  if [[ -f "${RUN_DIR}/smoke_report.json" ]]; then
+    mv -f "${RUN_DIR}/smoke_report.json" "${RUN_DIR}/smoke_report.previous.json"
+  fi
   set +e
   "${command[@]}" 2>&1 | tee -a "${RUN_DIR}/logs/train.log"
   local training_exit="${PIPESTATUS[0]}"
   set -e
-  if [[ "${training_exit}" -eq 0 ]]; then
+  if [[ "${training_exit}" -eq 0 ]] && \
+    grep -q '"status": "complete"' "${RUN_DIR}/smoke_report.json" 2>/dev/null; then
     write_status "exited" 0
+  elif grep -q '"status": "partial"' "${RUN_DIR}/smoke_report.json" 2>/dev/null; then
+    training_exit=3
+    write_status "partial" 3
   else
+    if [[ "${training_exit}" -eq 0 ]]; then
+      training_exit=4
+    fi
     write_status "failed" "${training_exit}"
   fi
   exit "${training_exit}"

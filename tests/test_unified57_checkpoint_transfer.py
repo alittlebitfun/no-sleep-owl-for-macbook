@@ -20,6 +20,7 @@ if torch is not None:
         TwoStreamSchedule,
         build_pairwise_pu_masks,
         build_v3_checkpoint,
+        compute_pn_pos_weight,
         load_unified57_schema,
         pairwise_positive_unlabeled_ranking_loss,
         restore_v3_checkpoint,
@@ -130,6 +131,15 @@ def test_static_contract_fixes_336_square_and_safe_smoke_defaults() -> None:
     assert 'MAX_STEPS="${MAX_STEPS:-20}"' in launcher
     assert 'IMAGE_MAX_PIXELS="${IMAGE_MAX_PIXELS:-112896}"' in launcher
     assert "--nproc-per-node=8" in launcher
+    assert trainer.index("step_started = time.monotonic()") < trainer.index(
+        "raw_batch = next(loader_iterator)"
+    )
+    assert "while not target_reached:" in trainer
+    assert '"status": "complete" if run_complete else "partial"' in trainer
+    assert "return 0 if run_complete else 3" in trainer
+    assert "smoke_report.previous.json" in launcher
+    assert "training_exit=3" in launcher
+    assert 'write_status "partial" 3' in launcher
 
 
 def test_schema_digest_and_training_mode_counts_are_self_consistent() -> None:
@@ -432,3 +442,112 @@ def test_schema_loader_rejects_tampered_hash(tmp_path: Path) -> None:
 
     with pytest.raises(ValueError, match="schema SHA256 mismatch"):
         load_unified57_schema(path)
+
+
+@requires_torch
+def test_checkpoint_path_must_match_explicit_aggregate18_sha256(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    schema = load_unified57_schema(SCHEMA_PATH)
+    checkpoint_path = tmp_path / "aggregate18.pt"
+    torch.save(_source_state(_TinyTransferModel()), checkpoint_path)
+    actual_hash = hashlib.sha256(checkpoint_path.read_bytes()).hexdigest()
+
+    transfer_aggregate18_v2_checkpoint(
+        _TinyTransferModel(),
+        checkpoint_path,
+        target_tag_order=schema["labels"],
+        expected_lora_tensors=1,
+        expected_checkpoint_sha256=actual_hash,
+    )
+    def forbidden_torch_load(*_args, **_kwargs):
+        raise AssertionError("hash mismatch must fail before torch.load")
+
+    monkeypatch.setattr(torch, "load", forbidden_torch_load)
+    with pytest.raises(ValueError, match="checkpoint SHA256 mismatch"):
+        transfer_aggregate18_v2_checkpoint(
+            _TinyTransferModel(),
+            checkpoint_path,
+            target_tag_order=schema["labels"],
+            expected_lora_tensors=1,
+            expected_checkpoint_sha256="0" * 64,
+        )
+
+
+@requires_torch
+def test_schedule_rejects_duplicate_record_ids() -> None:
+    schema = load_unified57_schema(SCHEMA_PATH)
+    records = _records_for_sampler(schema)
+    records[1]["record_id"] = records[0]["record_id"]
+
+    with pytest.raises(ValueError, match="record_id"):
+        TwoStreamSchedule(
+            records,
+            tag_order=schema["labels"],
+            training_modes=schema["label_training_modes"],
+            world_size=8,
+            uniform_per_rank=6,
+            balanced_per_rank=2,
+            seed=17,
+        )
+
+
+@requires_torch
+def test_pos_weight_audit_enumerates_deterministic_schedule_exposures() -> None:
+    schema = load_unified57_schema(SCHEMA_PATH)
+    records = _records_for_sampler(schema)
+    schedule = TwoStreamSchedule(
+        records,
+        tag_order=schema["labels"],
+        training_modes=schema["label_training_modes"],
+        world_size=8,
+        uniform_per_rank=6,
+        balanced_per_rank=2,
+        seed=17,
+    )
+
+    _, audit = compute_pn_pos_weight(records, schema, cap=20.0, schedule=schedule)
+
+    assert audit["sampler_schedule_sha256"] == schedule.schedule_sha256
+    assert audit["count_scope"] == "deterministic two-stream schedule exposures"
+    assert audit["record_exposures"] == sum(len(batch) for batch in schedule.global_batches)
+
+
+@requires_torch
+def test_v3_resume_rejects_run_contract_drift_before_model_mutation(tmp_path: Path) -> None:
+    schema = load_unified57_schema(SCHEMA_PATH)
+    model = _TinyTransferModel()
+    optimizer = torch.optim.AdamW(model.parameters(), lr=1e-3)
+    checkpoint = build_v3_checkpoint(
+        model=model,
+        optimizer=optimizer,
+        tag_order=schema["labels"],
+        schema_sha256=schema["schema_sha256"],
+        manifest_sha256="a" * 64,
+        sampler_config={"world_size": 1},
+        sampler_schedule_sha256="b" * 64,
+        cursor={"global_step": 1, "global_batch_cursor": 1},
+        sampling_statistics={},
+        world_size=1,
+        rank_rng_states=[{"cpu": torch.get_rng_state(), "cuda": []}],
+        run_contract={"image_max_pixels": 112896, "lora_alpha": 32},
+    )
+    path = tmp_path / "checkpoint.pt"
+    torch.save(checkpoint, path)
+    before = model.classifier.weight.detach().clone()
+
+    with pytest.raises(ValueError, match="run_contract mismatch"):
+        restore_v3_checkpoint(
+            path,
+            model=model,
+            optimizer=optimizer,
+            expected_tag_order=schema["labels"],
+            expected_schema_sha256=schema["schema_sha256"],
+            expected_manifest_sha256="a" * 64,
+            expected_sampler_config={"world_size": 1},
+            expected_sampler_schedule_sha256="b" * 64,
+            expected_world_size=1,
+            rank=0,
+            expected_run_contract={"image_max_pixels": 196000, "lora_alpha": 32},
+        )
+    torch.testing.assert_close(model.classifier.weight, before)

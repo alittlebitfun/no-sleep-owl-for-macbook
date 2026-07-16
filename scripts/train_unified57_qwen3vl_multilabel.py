@@ -73,6 +73,9 @@ PU_OUTPUT_SEMANTICS = "uncalibrated_confidence"
 AGGREGATE18_CONFIG_SHA256 = (
     "651d8163065f78a46239453a0d5776d47087f61036c11321a40e465a0d0fe29b"
 )
+AGGREGATE18_CHECKPOINT_SHA256 = (
+    "e7cc9f8464498ce883d39ef1d7d7eaf4cbd51546931ae7c4b114131055ba46f9"
+)
 AGGREGATE18_TAG_ORDER = (
     "连帽",
     "毛领",
@@ -136,14 +139,26 @@ def _unwrap_model(model: nn.Module) -> nn.Module:
     return model
 
 
-def _load_torch_payload(checkpoint: Path | str | Mapping[str, object]) -> tuple[dict, str | None]:
+def _load_torch_payload(
+    checkpoint: Path | str | Mapping[str, object],
+    *,
+    expected_sha256: str | None = None,
+) -> tuple[dict, str | None]:
     if isinstance(checkpoint, Mapping):
+        if expected_sha256 is not None:
+            raise ValueError("cannot verify SHA256 for an in-memory checkpoint mapping")
         return dict(checkpoint), None
     path = Path(checkpoint)
+    checkpoint_sha256 = _sha256_file(path)
+    if expected_sha256 is not None and checkpoint_sha256 != expected_sha256:
+        raise ValueError(
+            "Aggregate18 checkpoint SHA256 mismatch: "
+            f"expected={expected_sha256}, actual={checkpoint_sha256}"
+        )
     payload = torch.load(path, map_location="cpu", weights_only=False)
     if not isinstance(payload, dict):
         raise ValueError("checkpoint must contain a dictionary payload")
-    return payload, _sha256_file(path)
+    return payload, checkpoint_sha256
 
 
 def validate_aggregate18_config(path: Path | str) -> dict:
@@ -184,6 +199,7 @@ def transfer_aggregate18_v2_checkpoint(
     target_tag_order: Sequence[str],
     source_tag_order: Sequence[str] = AGGREGATE18_TAG_ORDER,
     expected_lora_tensors: int = EXPECTED_LORA_TENSORS,
+    expected_checkpoint_sha256: str | None = None,
 ) -> dict:
     """Copy audited v2 weights without importing any training state.
 
@@ -191,7 +207,12 @@ def transfer_aggregate18_v2_checkpoint(
     explicit tag name, leaving the normal initialization of the other 39 rows
     byte-for-byte unchanged.
     """
-    payload, checkpoint_sha256 = _load_torch_payload(checkpoint)
+    if not isinstance(checkpoint, Mapping) and expected_checkpoint_sha256 is None:
+        raise ValueError("an expected Aggregate18 checkpoint SHA256 is required")
+    payload, checkpoint_sha256 = _load_torch_payload(
+        checkpoint,
+        expected_sha256=expected_checkpoint_sha256,
+    )
     if payload.get("format_version") != 2:
         raise ValueError("Aggregate18 initialization requires checkpoint format_version=2")
     state = payload.get("model")
@@ -426,6 +447,14 @@ class TwoStreamSchedule:
             raise ValueError("two-stream quotas must be non-negative with uniform > 0")
         if not records:
             raise ValueError("two-stream schedule requires at least one training record")
+        record_ids = [record.get("record_id") for record in records]
+        if any(not isinstance(record_id, str) or not record_id for record_id in record_ids):
+            raise ValueError("every scheduled record must have a non-empty record_id")
+        duplicate_ids = sorted(
+            record_id for record_id, count in Counter(record_ids).items() if count > 1
+        )
+        if duplicate_ids:
+            raise ValueError(f"two-stream schedule has duplicate record_id values: {duplicate_ids[:5]}")
         tag_order = tuple(tag_order)
         if len(tag_order) != 57:
             raise ValueError("two-stream schedule requires the fixed 57-label order")
@@ -656,6 +685,7 @@ def build_v3_checkpoint(
     pos_weight_audit: Mapping[str, object] | None = None,
     initialization_audit: Mapping[str, object] | None = None,
     loss_contract: Mapping[str, object] | None = None,
+    run_contract: Mapping[str, object] | None = None,
 ) -> dict:
     """Construct a trainable-only, fully resumable Unified57 format-v3 state."""
     tags = list(tag_order)
@@ -682,6 +712,7 @@ def build_v3_checkpoint(
         "manifest_sha256": manifest_sha256,
         "mask_contract_version": MASK_CONTRACT_VERSION,
         "loss_contract": resolved_loss_contract,
+        "run_contract": copy.deepcopy(dict(run_contract or {})),
         "pu_output_semantics": PU_OUTPUT_SEMANTICS,
         "model": trainable,
         "trainable_names": sorted(trainable),
@@ -718,6 +749,7 @@ def restore_v3_checkpoint(
     rank: int,
     expected_loss_contract: Mapping[str, object] | None = None,
     expected_pos_weight_audit: Mapping[str, object] | None = None,
+    expected_run_contract: Mapping[str, object] | None = None,
 ) -> dict:
     """Validate every resume contract before mutating model or optimizer state."""
     payload, _ = _load_torch_payload(checkpoint)
@@ -752,6 +784,10 @@ def restore_v3_checkpoint(
             "pos_weight_audit",
             payload.get("pos_weight_audit"),
             dict(expected_pos_weight_audit),
+        )
+    if expected_run_contract is not None:
+        _check_equal_metadata(
+            "run_contract", payload.get("run_contract"), dict(expected_run_contract)
         )
     expected_optimizer_map = _optimizer_group_name_map(model, optimizer)
     _check_equal_metadata(
@@ -906,6 +942,7 @@ class Unified57ManifestDataset(Dataset):
     def __init__(self, manifest: Path | str, schema: Mapping[str, object]) -> None:
         self.manifest = Path(manifest)
         self.records: list[dict] = []
+        seen_record_ids: set[str] = set()
         with self.manifest.open(encoding="utf-8") as handle:
             for line_number, line in enumerate(handle, start=1):
                 if not line.strip():
@@ -923,7 +960,14 @@ class Unified57ManifestDataset(Dataset):
                     raise ValueError(
                         f"{self.manifest}:{line_number}: training manifest contains split={split!r}"
                     )
-                self.records.append(validate_unified57_record(raw, schema))
+                normalized = validate_unified57_record(raw, schema)
+                record_id = str(normalized["record_id"])
+                if record_id in seen_record_ids:
+                    raise ValueError(
+                        f"{self.manifest}:{line_number}: duplicate record_id {record_id!r}"
+                    )
+                seen_record_ids.add(record_id)
+                self.records.append(normalized)
         if not self.records:
             raise ValueError("Unified57 training manifest is empty")
         self.source_names = sorted(
@@ -1063,13 +1107,28 @@ def compute_pn_pos_weight(
     schema: Mapping[str, object],
     *,
     cap: float = 20.0,
+    schedule: TwoStreamSchedule | None = None,
 ) -> tuple[torch.Tensor, dict]:
-    """Count only known train cells; PU/unknown cells never enter the ratio."""
+    """Count known cells over the deterministic exposure plan only."""
     if cap < 1.0:
         raise ValueError("pos_weight cap must be at least 1.0")
     positive = torch.zeros(57, dtype=torch.float64)
     negative = torch.zeros(57, dtype=torch.float64)
-    for record in records:
+    if schedule is None:
+        exposed_records = list(records)
+        count_scope = "unique train records, known_mask cells only"
+        schedule_sha256 = None
+    else:
+        if schedule.records is not records and list(schedule.records) != list(records):
+            raise ValueError("pos_weight schedule records differ from the training records")
+        exposed_records = [
+            records[reference.record_index]
+            for batch in schedule.global_batches
+            for reference in batch
+        ]
+        count_scope = "deterministic two-stream schedule exposures"
+        schedule_sha256 = schedule.schedule_sha256
+    for record in exposed_records:
         labels = torch.tensor(record["labels"], dtype=torch.float64)
         known = torch.tensor(record["known_mask"], dtype=torch.bool)
         positive += known & (labels >= 0.5)
@@ -1088,7 +1147,9 @@ def compute_pn_pos_weight(
         raw[index] = negative[index] / positive[index].clamp_min(1.0)
         weights[index] = raw[index].clamp(1.0, cap)
     audit = {
-        "count_scope": "unique train records, known_mask cells only",
+        "count_scope": count_scope,
+        "record_exposures": len(exposed_records),
+        "sampler_schedule_sha256": schedule_sha256,
         "cap": float(cap),
         "positive_counts": positive.to(dtype=torch.int64).tolist(),
         "negative_counts": negative.to(dtype=torch.int64).tolist(),
@@ -1332,6 +1393,7 @@ def save_v3_checkpoint(
     pos_weight_audit: Mapping[str, object],
     initialization_audit: Mapping[str, object],
     loss_contract: Mapping[str, object],
+    run_contract: Mapping[str, object],
 ) -> None:
     rng_states = _gather_rank_rng_states(world_size)
     if rank == 0:
@@ -1351,6 +1413,7 @@ def save_v3_checkpoint(
             pos_weight_audit=pos_weight_audit,
             initialization_audit=initialization_audit,
             loss_contract=loss_contract,
+            run_contract=run_contract,
         )
         checkpoint_dir = output_dir / "checkpoints"
         latest = checkpoint_dir / "latest.pt"
@@ -1520,6 +1583,10 @@ def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     state_group.add_argument("--resume", type=Path)
     state_group.add_argument("--fresh", action="store_true")
     parser.add_argument("--aggregate18-config", type=Path)
+    parser.add_argument(
+        "--aggregate18-checkpoint-sha256",
+        default=AGGREGATE18_CHECKPOINT_SHA256,
+    )
     parser.add_argument("--expected-world-size", type=int, default=8)
     parser.add_argument("--micro-batch-size", type=int, default=DEFAULT_MICRO_BATCH_SIZE)
     parser.add_argument("--uniform-per-rank", type=int, default=DEFAULT_UNIFORM_PER_RANK)
@@ -1554,6 +1621,8 @@ def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         parser.error("--aggregate18-config is required with --init-from-aggregate18")
     if args.aggregate18_config is not None and not args.init_from_aggregate18:
         parser.error("--aggregate18-config is valid only for Aggregate18 initialization")
+    if args.aggregate18_checkpoint_sha256 != AGGREGATE18_CHECKPOINT_SHA256:
+        parser.error("only the audited Aggregate18 latest.pt SHA256 is allowed")
     return args
 
 
@@ -1564,15 +1633,39 @@ def _loss_contract(args: argparse.Namespace, pu_tags: Sequence[str]) -> dict:
     return {
         "version": LOSS_CONTRACT_VERSION,
         "pn": "per-sample masked BCE over known_mask cells",
-        "pn_pos_weight_scope": "unique train known cells",
+        "pn_pos_weight_scope": "deterministic two-stream schedule known-cell exposures",
         "pu": "FP32 positive-vs-unlabeled pairwise hinge ranking",
         "pu_tags": list(pu_tags),
         "pu_margin": float(args.pu_margin),
         "pu_loss_weight": float(args.pu_loss_weight),
         "pu_unlabeled_stream": "uniform_only",
+        "pu_pair_scope": "rank_local_microbatch",
+        "pn_reduction_scope": "rank_local_active_sample_mean_then_ddp_mean",
         "unsupported_tags": ["假两件"],
         "unknown_is_negative": False,
         "pu_output_semantics": PU_OUTPUT_SEMANTICS,
+    }
+
+
+def _run_contract(args: argparse.Namespace) -> dict:
+    model_path = Path(args.model)
+    config_path = model_path / "config.json"
+    return {
+        "base_model": str(args.model),
+        "base_model_config_sha256": (
+            _sha256_file(config_path) if config_path.is_file() else None
+        ),
+        "image_max_pixels": int(args.image_max_pixels),
+        "micro_batch_size_per_gpu": int(args.micro_batch_size),
+        "gradient_accumulation": int(args.gradient_accumulation),
+        "lora_rank": int(args.lora_rank),
+        "lora_alpha": int(args.lora_alpha),
+        "lora_dropout": float(args.lora_dropout),
+        "head_dropout": float(args.head_dropout),
+        "learning_rate": float(args.learning_rate),
+        "weight_decay": float(args.weight_decay),
+        "dtype": "bfloat16",
+        "vision_prompt_sha256": hashlib.sha256(VISION_PROMPT.encode("utf-8")).hexdigest(),
     }
 
 
@@ -1602,10 +1695,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         seed=args.seed,
     )
     pos_weight, pos_weight_audit = compute_pn_pos_weight(
-        dataset.records, schema, cap=args.max_pos_weight
+        dataset.records, schema, cap=args.max_pos_weight, schedule=schedule
     )
     data_audit = dataset_contract_audit(dataset.records, schema)
     loss_contract = _loss_contract(args, pu_tags)
+    run_contract = _run_contract(args)
     _seed_model_initialization(args.seed)
     model = _load_qwen3vl_classifier(
         args.model,
@@ -1622,6 +1716,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             model,
             args.init_from_aggregate18,
             target_tag_order=schema["labels"],
+            expected_checkpoint_sha256=args.aggregate18_checkpoint_sha256,
         )
         initialization_audit["source_config_sha256"] = config_audit["sha256"]
         initialization_audit["mode"] = "aggregate18_v2_weight_transfer"
@@ -1667,6 +1762,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             rank=rank,
             expected_loss_contract=loss_contract,
             expected_pos_weight_audit=pos_weight_audit,
+            expected_run_contract=run_contract,
         )
         cursor = dict(resumed["cursor"])
         statistics_payload = copy.deepcopy(resumed["sampling_statistics"])
@@ -1735,6 +1831,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "sampler_config": schedule.config,
                 "sampler_schedule_sha256": schedule.schedule_sha256,
                 "loss_contract": loss_contract,
+                "run_contract": run_contract,
                 "defaults": {
                     "image_max_pixels": args.image_max_pixels,
                     "micro_batch_size_per_gpu": args.micro_batch_size,
@@ -1747,18 +1844,33 @@ def main(argv: Sequence[str] | None = None) -> int:
             args.output_dir / "run_contract.json",
         )
 
-    for relative_batch, raw_batch in enumerate(loader):
-        global_batch_index = cursor["global_batch_cursor"]
+    stop_reason: str | None = None
+    target_reached = bool(args.max_steps and cursor["global_step"] >= args.max_steps)
+    if target_reached:
+        stop_reason = "max_steps_already_reached"
+    loader_iterator = iter(loader)
+    last_saved_cursor: tuple[int, int] | None = None
+    final_checkpoint_seconds = 0.0
+    while not target_reached:
+        step_started = time.monotonic()  # Includes DataLoader/processor wait.
         elapsed = prior_elapsed + (time.monotonic() - started_at)
-        deadline = elapsed >= deadline_seconds
-        if _distributed_stop_flag(device, stop_signal["requested"] or deadline):
+        local_deadline = elapsed >= deadline_seconds
+        if _distributed_stop_flag(device, stop_signal["requested"] or local_deadline):
+            stop_reason = "signal_or_deadline"
             break
-        step_started = time.monotonic()
+        try:
+            raw_batch = next(loader_iterator)
+        except StopIteration:
+            stop_reason = "schedule_exhausted"
+            break
+        elapsed = prior_elapsed + (time.monotonic() - started_at)
+        local_deadline = elapsed >= deadline_seconds
+        if _distributed_stop_flag(device, stop_signal["requested"] or local_deadline):
+            stop_reason = "signal_or_deadline"
+            break
+        global_batch_index = cursor["global_batch_cursor"]
         batch = _move_tensor_batch(raw_batch, device)
-        accumulation_boundary = (
-            (pending_microbatches + 1) >= args.gradient_accumulation
-            or relative_batch + 1 == len(loader)
-        )
+        accumulation_boundary = (pending_microbatches + 1) >= args.gradient_accumulation
         sync_context = contextlib.nullcontext()
         if (
             isinstance(model, DistributedDataParallel)
@@ -1822,26 +1934,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         pending_microbatches = 0
         cursor["global_step"] += 1
         statistics_payload["optimizer_steps"] = cursor["global_step"]
-        step_seconds = time.monotonic() - step_started
-        step_times.append(step_seconds)
         elapsed = prior_elapsed + (time.monotonic() - started_at)
-        progress = {
-            "format_version": FORMAT_VERSION,
-            "global_step": cursor["global_step"],
-            "global_batch_cursor": cursor["global_batch_cursor"],
-            "global_batch_count": len(schedule.global_batches),
-            "loss": last_loss,
-            "loss_finite": True,
-            "gradients": gradient_audit,
-            "step_seconds": step_seconds,
-            "elapsed_seconds": elapsed,
-            "schema_sha256": schema["schema_sha256"],
-            "sampler_schedule_sha256": schedule.schedule_sha256,
-        }
-        if rank == 0:
-            _atomic_json(progress, args.output_dir / "progress.json")
-            if cursor["global_step"] % args.log_every == 0:
-                print(json.dumps(progress, ensure_ascii=False), flush=True)
         if cursor["global_step"] % args.save_every == 0:
             save_v3_checkpoint(
                 model=model,
@@ -1860,36 +1953,90 @@ def main(argv: Sequence[str] | None = None) -> int:
                 pos_weight_audit=pos_weight_audit,
                 initialization_audit=initialization_audit,
                 loss_contract=loss_contract,
+                run_contract=run_contract,
             )
+            last_saved_cursor = (
+                cursor["global_step"],
+                cursor["global_batch_cursor"],
+            )
+        step_seconds = time.monotonic() - step_started
+        progress = {
+            "format_version": FORMAT_VERSION,
+            "global_step": cursor["global_step"],
+            "global_batch_cursor": cursor["global_batch_cursor"],
+            "global_batch_count": len(schedule.global_batches),
+            "loss": last_loss,
+            "loss_finite": True,
+            "gradients": gradient_audit,
+            "step_seconds": step_seconds,
+            "elapsed_seconds": prior_elapsed + (time.monotonic() - started_at),
+            "schema_sha256": schema["schema_sha256"],
+            "sampler_schedule_sha256": schedule.schedule_sha256,
+        }
+        if rank == 0:
+            _atomic_json(progress, args.output_dir / "progress.json")
+            if cursor["global_step"] % args.log_every == 0:
+                print(json.dumps(progress, ensure_ascii=False), flush=True)
+        # Gate timing includes decode/processor wait, optimizer, periodic
+        # checkpoint, progress persistence, and log output.
+        step_times.append(time.monotonic() - step_started)
         if args.max_steps and cursor["global_step"] >= args.max_steps:
-            break
+            target_reached = True
+            stop_reason = "max_steps_reached"
+        elif cursor["global_batch_cursor"] >= len(schedule.global_batches):
+            target_reached = True
+            stop_reason = "schedule_exhausted"
 
     elapsed = prior_elapsed + (time.monotonic() - started_at)
-    save_v3_checkpoint(
-        model=model,
-        optimizer=optimizer,
-        output_dir=args.output_dir,
-        rank=rank,
-        world_size=world_size,
-        tag_order=schema["labels"],
-        schema_sha256=schema["schema_sha256"],
-        manifest_sha256=manifest_sha256,
-        sampler_config=schedule.config,
-        sampler_schedule_sha256=schedule.schedule_sha256,
-        cursor=cursor,
-        sampling_statistics=statistics_payload,
-        elapsed_seconds=elapsed,
-        pos_weight_audit=pos_weight_audit,
-        initialization_audit=initialization_audit,
-        loss_contract=loss_contract,
-    )
+    current_cursor = (cursor["global_step"], cursor["global_batch_cursor"])
+    if current_cursor != last_saved_cursor:
+        checkpoint_started = time.monotonic()
+        save_v3_checkpoint(
+            model=model,
+            optimizer=optimizer,
+            output_dir=args.output_dir,
+            rank=rank,
+            world_size=world_size,
+            tag_order=schema["labels"],
+            schema_sha256=schema["schema_sha256"],
+            manifest_sha256=manifest_sha256,
+            sampler_config=schedule.config,
+            sampler_schedule_sha256=schedule.schedule_sha256,
+            cursor=cursor,
+            sampling_statistics=statistics_payload,
+            elapsed_seconds=elapsed,
+            pos_weight_audit=pos_weight_audit,
+            initialization_audit=initialization_audit,
+            loss_contract=loss_contract,
+            run_contract=run_contract,
+        )
+        final_checkpoint_seconds = time.monotonic() - checkpoint_started
+    elapsed = prior_elapsed + (time.monotonic() - started_at)
     stable_times = step_times[2:] if len(step_times) > 2 else step_times
     mean_step = statistics.fmean(stable_times) if stable_times else 0.0
     global_batch_size = world_size * args.micro_batch_size
     throughput = global_batch_size / mean_step if mean_step else 0.0
-    projected_seconds = mean_step * len(schedule.global_batches) if mean_step else 0.0
+    projected_seconds = (
+        mean_step * len(schedule.global_batches) + final_checkpoint_seconds
+        if mean_step
+        else 0.0
+    )
+    smoke_target_complete = bool(
+        args.max_steps and cursor["global_step"] >= args.max_steps
+    )
+    smoke_measurement_complete = bool(
+        smoke_target_complete and len(step_times) >= 20
+    )
+    formal_target_complete = bool(
+        not args.max_steps
+        and cursor["global_batch_cursor"] >= len(schedule.global_batches)
+    )
+    run_complete = smoke_target_complete if args.max_steps else formal_target_complete
     smoke_report = {
-        "status": "complete",
+        "status": "complete" if run_complete else "partial",
+        "stop_reason": stop_reason or "unknown",
+        "target_reached": run_complete,
+        "smoke_measurement_complete": smoke_measurement_complete,
         "global_step": cursor["global_step"],
         "global_batch_cursor": cursor["global_batch_cursor"],
         "elapsed_seconds": elapsed,
@@ -1899,7 +2046,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         "p95_step_seconds": _percentile(stable_times, 0.95),
         "global_samples_per_second": throughput,
         "projected_full_schedule_seconds": projected_seconds,
-        "formal_projection_within_4h50": bool(projected_seconds and projected_seconds <= 17400),
+        "final_checkpoint_seconds": final_checkpoint_seconds,
+        "formal_projection_within_4h50": bool(
+            smoke_measurement_complete
+            and projected_seconds
+            and projected_seconds <= 17400
+        ),
         "last_loss": last_loss,
         "loss_finite": all(math.isfinite(value) for value in last_loss.values()),
         "gradient_audit": gradient_audit,
@@ -1909,7 +2061,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         "sampler_schedule_sha256": schedule.schedule_sha256,
         "next_action": (
             "set formal max_steps from the measured full-schedule projection"
-            if len(step_times) >= 20
+            if smoke_measurement_complete
             else "collect a complete 20-step smoke before choosing formal parameters"
         ),
     }
@@ -1919,7 +2071,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     if dist.is_initialized():
         dist.barrier()
         dist.destroy_process_group()
-    return 0
+    return 0 if run_complete else 3
 
 
 if __name__ == "__main__":
