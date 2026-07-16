@@ -503,6 +503,29 @@ def _as_tag_list(value: object) -> list[object]:
     raise ValueError(f"tag collection must be a string or list: {value!r}")
 
 
+def _validate_evidence_training_modes(
+    record_id: str,
+    schema: Mapping[str, object],
+    *,
+    pn_positive: set[str],
+    pn_negative: set[str],
+    pu_positive: set[str],
+) -> None:
+    modes = schema["label_training_modes"]
+    for tag in sorted(pn_positive | pn_negative):
+        mode = modes[tag]
+        if mode != "pn":
+            raise ValueError(
+                f"{record_id}: {tag} has mode={mode} and cannot enter PN evidence"
+            )
+    for tag in sorted(pu_positive):
+        mode = modes[tag]
+        if mode != "pu":
+            raise ValueError(
+                f"{record_id}: {tag} has mode={mode} and cannot enter PU evidence"
+            )
+
+
 def _normalize_dictionary_row(
     record: Mapping[str, object],
     *,
@@ -616,12 +639,15 @@ def _normalize_dictionary_row(
     for raw_tag in _as_tag_list(record.get("pn_negative_tags")):
         pn_negative.add(_normalize_tag(raw_tag, labels_set))
 
+    _validate_evidence_training_modes(
+        record_id,
+        schema,
+        pn_positive=pn_positive,
+        pn_negative=pn_negative,
+        pu_positive=pu_positive,
+    )
     if not (pn_positive or pu_positive or pn_negative):
         raise ValueError(f"{record_id}: dictionary row has no usable supervision")
-    if (pn_positive | pu_positive) & unsupported:
-        raise ValueError(f"{record_id}: unsupported labels cannot carry positives")
-    if pn_positive & pu_positive:
-        pu_positive.difference_update(pn_positive)
     image_path, sha256, phash64 = _identity(
         record, root=root, validate_images=validate_images
     )
@@ -797,10 +823,17 @@ def _aggregate_exact_group(
         "source": "+".join(sources),
         "sources": sources,
         "source_record_ids": source_record_ids,
+        "binding_count": len(members),
+        "dictionary_binding_count": sum(
+            member.source == "dictionary_v4" for member in members
+        ),
+        "jd_binding_count": sum(
+            member.source == "jd_complete23" for member in members
+        ),
         "image_path": representative.image_path,
-        "image_sha256": min(member.sha256 for member in members),
+        "image_sha256": representative.sha256,
         "image_sha256s": sorted({member.sha256 for member in members}),
-        "phash64": min(member.phash64 for member in members),
+        "phash64": representative.phash64,
         "exact_phashes": sorted({member.phash64 for member in members}),
         "visual_group_id": visual_group_id,
         "labels": labels,

@@ -5,6 +5,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 from scripts import build_unified57_masked_dataset as builder
 
 
@@ -106,6 +108,9 @@ def test_same_visual_dictionary_rows_aggregate_all_positive_labels():
     assert states["H型"] == (1.0, 1, 0)
     assert states["长款"] == (1.0, 1, 0)
     assert set(row["source_record_ids"]) == {"d-h", "d-long"}
+    assert row["binding_count"] == 2
+    assert row["dictionary_binding_count"] == 2
+    assert row["jd_binding_count"] == 0
 
 
 def test_jd_raw_or_encoded_rows_open_exactly_23_pn_dimensions():
@@ -184,6 +189,10 @@ def test_positive_wins_same_label_but_safe_group_multi_positive_is_unknown():
 
     positive_wins = _by_tag(rows[frozenset({"jd-negative", "dict-positive"})])
     assert positive_wins["压胶门襟"] == (1.0, 1, 0)
+    mixed_row = rows[frozenset({"jd-negative", "dict-positive"})]
+    assert mixed_row["binding_count"] == 2
+    assert mixed_row["dictionary_binding_count"] == 1
+    assert mixed_row["jd_binding_count"] == 1
 
     pure_conflict = _by_tag(rows[frozenset({"jd-a", "dict-h"})])
     for tag in ("H型", "O型", "X型", "A型", "茧型", "箱型"):
@@ -264,6 +273,73 @@ def test_exact_phash_merges_supervision_and_distance_two_only_joins_split_compon
     assert exact_row["visual_group_id"] != near_row["visual_group_id"]
     assert exact_row["visual_component_id"] == near_row["visual_component_id"]
     assert exact_row["split"] == near_row["split"]
+
+
+def test_representative_path_sha_and_phash_come_from_one_member():
+    representative = _dictionary("a", "前门襟", "f" * 64, "f" * 16)
+    same_phash = _dictionary("b", "袖标", "0" * 64, "f" * 16)
+    same_sha = _dictionary("c", "贴袋", "f" * 64, "0" * 16)
+
+    result = _build(dictionary=[representative, same_phash, same_sha])
+
+    assert len(result["records"]) == 1
+    row = result["records"][0]
+    assert row["image_path"].endswith("images/前门襟/a.jpg")
+    assert row["image_sha256"] == "f" * 64
+    assert row["phash64"] == "f" * 16
+    assert row["image_sha256s"] == ["0" * 64, "f" * 64]
+    assert row["exact_phashes"] == ["0" * 16, "f" * 16]
+
+
+def _identity_only_dictionary(record_id="invalid-mode"):
+    return {
+        "record_id": record_id,
+        "relative_path": f"images/{record_id}.jpg",
+        "sha256": _sha(record_id),
+        "phash64": _phash(0),
+    }
+
+
+@pytest.mark.parametrize("label_value", [0.0, 1.0])
+def test_explicit_known_mask_rejects_pure_pu_label(label_value):
+    schema = builder.load_schema(SCHEMA_PATH)
+    index = schema["labels"].index("前门襟")
+    row = _identity_only_dictionary(f"pu-as-pn-{int(label_value)}")
+    row["labels"] = [0.0] * 57
+    row["known_mask"] = [0] * 57
+    row["labels"][index] = label_value
+    row["known_mask"][index] = 1
+
+    with pytest.raises(ValueError, match="前门襟.*mode=pu"):
+        _build(dictionary=[row])
+
+
+def test_pn_negative_tags_rejects_pure_pu_label():
+    row = _identity_only_dictionary("pu-negative-tag")
+    row["pn_negative_tags"] = ["前门襟"]
+
+    with pytest.raises(ValueError, match="前门襟.*mode=pu"):
+        _build(dictionary=[row])
+
+
+def test_pu_positive_mask_rejects_pn_label():
+    schema = builder.load_schema(SCHEMA_PATH)
+    index = schema["labels"].index("H型")
+    row = _identity_only_dictionary("pn-as-pu")
+    row["pu_positive_mask"] = [0] * 57
+    row["pu_positive_mask"][index] = 1
+
+    with pytest.raises(ValueError, match="H型.*mode=pn"):
+        _build(dictionary=[row])
+
+
+@pytest.mark.parametrize("evidence_field", ["pn_negative_tags", "pu_positive_tags"])
+def test_unsupported_label_rejects_all_explicit_supervision(evidence_field):
+    row = _identity_only_dictionary(f"unsupported-{evidence_field}")
+    row[evidence_field] = ["假两件"]
+
+    with pytest.raises(ValueError, match="假两件.*mode=unsupported"):
+        _build(dictionary=[row])
 
 
 def test_train_val_test_have_no_visual_component_crossing():
