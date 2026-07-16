@@ -90,6 +90,11 @@ test("secondary menu bar click opens the context menu") {
     try expect(StatusBarInteraction.action(for: .secondary) == .showContextMenu, "secondary click must show menu")
 }
 
+test("menu bar icon uses only system managed placement") {
+    try expect(StatusItemPlacementPolicy.usesFloatingOverlay == false, "floating overlays can cover the menu bar or drift near the Dock")
+    try expect(StatusItemPlacementPolicy.persistsCustomPosition == true, "the last visible native position should survive relaunches")
+}
+
 test("duration formatter covers seconds minutes and hours") {
     try expect(OwlDurationFormatter.string(seconds: 0) == "00:00", "wrong zero duration")
     try expect(OwlDurationFormatter.string(seconds: 65) == "01:05", "wrong minute duration")
