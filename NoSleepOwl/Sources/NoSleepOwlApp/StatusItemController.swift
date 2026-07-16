@@ -26,9 +26,6 @@ final class StatusItemController: NSObject {
             button.action = #selector(clicked(_:))
             button.sendAction(on: [.leftMouseUp, .rightMouseUp])
         }
-        if StatusItemPlacementPolicy.persistsCustomPosition {
-            statusItem.autosaveName = "NoSleepOwl.StatusItem.v2"
-        }
         statusItem.isVisible = true
         refresh()
     }

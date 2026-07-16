@@ -30,7 +30,16 @@ let canvas = NSRect(x: 0, y: 0, width: canvasSize, height: canvasSize)
 canvas.fill()
 let cornerRadius = CGFloat(canvasSize) * 0.2237
 NSBezierPath(roundedRect: canvas, xRadius: cornerRadius, yRadius: cornerRadius).addClip()
-source.draw(in: canvas, from: .zero, operation: .sourceOver, fraction: 1)
+// Keep a quiet navy background while giving the owl a small macOS-style margin.
+NSColor(calibratedRed: 0.025, green: 0.055, blue: 0.16, alpha: 1).setFill()
+canvas.fill()
+let foregroundScale: CGFloat = 0.90
+let foregroundSide = CGFloat(canvasSize) * foregroundScale
+let foregroundRect = NSRect(x: (CGFloat(canvasSize) - foregroundSide) / 2,
+                             y: (CGFloat(canvasSize) - foregroundSide) / 2,
+                             width: foregroundSide,
+                             height: foregroundSide)
+source.draw(in: foregroundRect, from: .zero, operation: .sourceOver, fraction: 1)
 context.flushGraphics()
 NSGraphicsContext.restoreGraphicsState()
 

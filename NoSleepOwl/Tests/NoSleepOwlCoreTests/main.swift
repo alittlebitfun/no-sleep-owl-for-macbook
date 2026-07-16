@@ -144,7 +144,7 @@ test("secondary menu bar click opens the context menu") {
 
 test("menu bar icon uses only system managed placement") {
     try expect(StatusItemPlacementPolicy.usesFloatingOverlay == false, "floating overlays can cover the menu bar or drift near the Dock")
-    try expect(StatusItemPlacementPolicy.persistsCustomPosition == true, "the last visible native position should survive relaunches")
+    try expect(StatusItemPlacementPolicy.persistsCustomPosition == false, "custom status item positions can restore off-screen")
 }
 
 test("settings entry is always available") {
@@ -291,7 +291,7 @@ test("helper disable restores original value") {
     try expect(helper.isEnabled == false, "helper must be disabled")
 }
 
-test("release metadata identifies version 0.1.0 build 1") {
+test("release metadata identifies version 0.1.0 build 2") {
     guard let root = ProcessInfo.processInfo.environment["NO_SLEEP_OWL_ROOT"] else {
         throw TestError.expectation("NO_SLEEP_OWL_ROOT must point to the repository root")
     }
@@ -301,7 +301,7 @@ test("release metadata identifies version 0.1.0 build 1") {
         throw TestError.expectation("Info.plist must contain a dictionary")
     }
     try expect(metadata["CFBundleShortVersionString"] as? String == "0.1.0", "release version must be 0.1.0")
-    try expect(metadata["CFBundleVersion"] as? String == "1", "release build must be 1")
+    try expect(metadata["CFBundleVersion"] as? String == "2", "release build must be 2")
 }
 
 if failures > 0 {
