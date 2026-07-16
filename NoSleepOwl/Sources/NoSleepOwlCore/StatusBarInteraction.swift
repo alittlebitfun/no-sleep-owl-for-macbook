@@ -16,3 +16,8 @@ public enum StatusBarInteraction {
         }
     }
 }
+
+public enum StatusItemPlacementPolicy {
+    public static let usesFloatingOverlay = false
+    public static let persistsCustomPosition = true
+}
