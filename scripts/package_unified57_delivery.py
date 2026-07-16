@@ -977,6 +977,14 @@ This package contains 288 LoRA tensors, the 57-label classifier head, frozen
 thresholds, inference code, and frozen verification32 references. The
 Qwen3-VL base model is an external dependency and is not included.
 
+## Install
+
+Python 3.11 and a CUDA-capable PyTorch environment are recommended.
+
+```bash
+python -m pip install -r requirements.txt
+```
+
 ## Required base model
 
 `{base_model}`
@@ -985,24 +993,118 @@ Use base-model bytes whose `config.json` SHA-256 matches `model_config.json`.
 The classifier input prompt stays fixed to the training prompt. `final_prompt.txt`
 is the product taxonomy and output contract.
 
-## Inference
+## Single-image inference
+
+Replace `/path/to/Qwen3-VL-8B-Instruct` and `image.jpg` with local paths.
+
+### Final prompt format: selected_only
 
 ```bash
-python infer.py --base-model /path/to/Qwen3-VL-8B-Instruct --image image.jpg
+python infer.py \
+  --base-model /path/to/Qwen3-VL-8B-Instruct \
+  --image image.jpg \
+  --mode selected_only
 ```
 
-The default `selected_only` mode emits a strict four-category JSON object with
-tag-name strings. Additional modes are `selected_with_confidence`, `all_scores`,
-and `verification_float32`.
+`selected_only` is the default and matches the name-only structure required by
+`final_prompt.txt`:
 
-- `selected_with_confidence` uses the same winners as `selected_only` and adds
-  two-decimal confidence strings.
-- `all_scores` emits all 57 tags in schema order with two-decimal strings;
-  `假两件` is fixed to `0.00` because its training mode is unsupported.
+```json
+{{
+  "局部结构": ["连帽", "立领"],
+  "廓形": ["H型", "宽松", "中长款"],
+  "工艺": ["菱形绗线"],
+  "面辅料": ["帽口抽绳", "树脂拉链", "哑光面料"]
+}}
+```
+
+### Selected tags with confidence
+
+```bash
+python infer.py \
+  --base-model /path/to/Qwen3-VL-8B-Instruct \
+  --image image.jpg \
+  --mode selected_with_confidence
+```
+
+This mode uses exactly the same selected winners and adds two-decimal strings:
+
+```json
+{{
+  "局部结构": [{{"name": "连帽", "confidence": "0.91"}}],
+  "廓形": [{{"name": "H型", "confidence": "0.86"}}],
+  "工艺": [],
+  "面辅料": []
+}}
+```
+
+### All 57 scores
+
+```bash
+python infer.py \
+  --base-model /path/to/Qwen3-VL-8B-Instruct \
+  --image image.jpg \
+  --mode all_scores
+```
+
+The result is a `scores` object with exactly 57 scores in `label_schema.json`
+order. Every value is a two-decimal string. The excerpt below shows the wrapper;
+the real result contains all 57 keys:
+
+```json
+{{
+  "scores": {{
+    "连帽": "0.91",
+    "拆卸帽": "0.08",
+    "假两件": "0.00",
+    "无袖": "0.03"
+  }}
+}}
+```
+
+`假两件` is fixed to `0.00` because that label has no trainable supervision in
+this release.
+
+## Selection contract
+
+The taxonomy has 4 categories and 20 subcategories. Both selected modes visit
+all 20 subcategories and emit at most one threshold-passing winner from each
+relevant subcategory. The JSON stays flat at category level because this is the
+final prompt contract. `假两件` is the single unsupported subcategory and is
+never selected, so 19 subcategories are currently usable for prediction.
+
+## Batch inference
+
+Pass a directory or repeat `--image`. Multiple inputs produce UTF-8 JSONL with
+one record per image:
+
+```bash
+python infer.py \
+  --base-model /path/to/Qwen3-VL-8B-Instruct \
+  --image /path/to/images \
+  --mode all_scores \
+  --batch-size 8 \
+  --output predictions.jsonl
+```
+
+Each JSONL row uses this envelope:
+
+```json
+{{"image": "/path/to/images/a.jpg", "output": {{"scores": {{"...": "..."}}}}}}
+```
+
+A single image emits the pure mode-specific JSON object. Multiple images or a
+directory emit the JSONL envelope above. Without `--output`, results are written
+to standard output.
+
+## Other mode
+
 - `verification_float32` exposes unrounded 57-head values only for reproduction.
 
 The 20 PU-label values have `uncalibrated_confidence` semantics. The package
-does not claim calibrated probabilities for those labels.
+does not claim calibrated probabilities for those labels. The 36 PN-label
+scores are thresholded using the frozen validation thresholds in
+`thresholds.json`.
 
 ## Verification references
 
@@ -1279,13 +1381,38 @@ def build_model(base_model, config, device):
 
 
 def parse_args(argv=None):
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--base-model")
-    parser.add_argument("--image", action="append", type=Path)
-    parser.add_argument("--verification-manifest", type=Path)
-    parser.add_argument("--output", type=Path)
-    parser.add_argument("--batch-size", type=int, default=1)
-    parser.add_argument("--device", default="cuda:0")
+    parser = argparse.ArgumentParser(
+        description=(
+            "Run Unified57 apparel tagging in selected-only, confidence, "
+            "or complete 57-score mode."
+        )
+    )
+    parser.add_argument(
+        "--base-model",
+        help="Local Qwen3-VL base-model directory matching model_config.json.",
+    )
+    parser.add_argument(
+        "--image",
+        action="append",
+        type=Path,
+        help="Image file or directory; repeat this option for multiple inputs.",
+    )
+    parser.add_argument(
+        "--verification-manifest",
+        type=Path,
+        help="Frozen JSONL verification manifest; cannot be combined with --image.",
+    )
+    parser.add_argument(
+        "--output",
+        type=Path,
+        help="Write single-image JSON or multi-image JSONL to this path.",
+    )
+    parser.add_argument(
+        "--batch-size", type=int, default=1, help="Inference batch size (default: 1)."
+    )
+    parser.add_argument(
+        "--device", default="cuda:0", help="Torch device (default: cuda:0)."
+    )
     parser.add_argument(
         "--mode",
         choices=(
@@ -1299,6 +1426,10 @@ def parse_args(argv=None):
             "verification-float32",
         ),
         default="selected_only",
+        help=(
+            "Output contract: selected_only (default), selected_with_confidence, "
+            "all_scores, or reproduction-only verification_float32."
+        ),
     )
     parser.add_argument(
         "--scores-json",

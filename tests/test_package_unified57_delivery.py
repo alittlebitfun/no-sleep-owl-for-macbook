@@ -554,6 +554,47 @@ def test_render_modes_follow_schema_and_unsupported_contract() -> None:
     assert with_confidence["工艺"] == [{"name": "压胶充绒", "confidence": "0.80"}]
 
 
+def test_selected_modes_traverse_all_supported_subcategories() -> None:
+    schema = json.loads(SCHEMA_PATH.read_text(encoding="utf-8"))
+    thresholds = {tag: (None if tag == "假两件" else 0.5) for tag in schema["labels"]}
+    scores = [0.99] * 57
+
+    selected = delivery.render_selected_only(scores, thresholds, schema)
+    with_confidence = delivery.render_selected_with_confidence(
+        scores, thresholds, schema
+    )
+
+    selected_tags = {
+        tag for category_tags in selected.values() for tag in category_tags
+    }
+    supported_subcategories = {
+        (category, subcategory)
+        for category, subcategories in schema["semantic_categories"].items()
+        for subcategory, tags in subcategories.items()
+        if any(tag != "假两件" for tag in tags)
+    }
+    selected_subcategories = {
+        (category, subcategory)
+        for category, subcategories in schema["semantic_categories"].items()
+        for subcategory, tags in subcategories.items()
+        if selected_tags.intersection(tags)
+    }
+
+    assert len(supported_subcategories) == 19
+    assert selected_subcategories == supported_subcategories
+    assert sum(len(tags) for tags in selected.values()) == 19
+    assert {
+        item["name"]
+        for category_items in with_confidence.values()
+        for item in category_items
+    } == selected_tags
+    assert all(
+        item["confidence"] == "0.99"
+        for category_items in with_confidence.values()
+        for item in category_items
+    )
+
+
 def test_reuses_training_v3_loader_and_fails_closed_on_provenance(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -671,6 +712,76 @@ def test_generated_infer_exposes_all_three_modes_without_loading_base(
     assert confidence["廓形"] == [{"name": "H型", "confidence": "0.91"}]
     assert all_scores["scores"]["假两件"] == "0.00"
     assert parsed.mode == "all_scores"
+
+
+def test_generated_infer_cli_serializes_all_customer_modes(
+    package: PackageFixture, tmp_path: Path
+) -> None:
+    infer_path = package.output / "infer.py"
+    spec = importlib.util.spec_from_file_location(
+        "generated_unified57_infer_cli", infer_path
+    )
+    assert spec is not None and spec.loader is not None
+    infer = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(infer)
+
+    config = json.loads(
+        (package.output / "model_config.json").read_text(encoding="utf-8")
+    )
+    scores = [0.99] * 57
+    scores_path = tmp_path / "scores.json"
+    _write_json(scores_path, {"scores": scores})
+
+    outputs = {}
+    for mode in ("selected_only", "selected_with_confidence", "all_scores"):
+        output_path = tmp_path / f"{mode}.json"
+        assert (
+            infer.main(
+                [
+                    "--scores-json",
+                    str(scores_path),
+                    "--mode",
+                    mode,
+                    "--output",
+                    str(output_path),
+                ]
+            )
+            == 0
+        )
+        outputs[mode] = json.loads(output_path.read_text(encoding="utf-8"))
+
+    assert list(outputs["selected_only"]) == ["局部结构", "廓形", "工艺", "面辅料"]
+    assert list(outputs["selected_with_confidence"]) == list(outputs["selected_only"])
+    assert all(
+        re.fullmatch(r"(?:0\.\d{2}|1\.00)", item["confidence"])
+        for category_items in outputs["selected_with_confidence"].values()
+        for item in category_items
+    )
+    assert list(outputs["all_scores"]["scores"]) == config["tag_order"]
+    assert len(outputs["all_scores"]["scores"]) == 57
+    assert outputs["all_scores"]["scores"]["假两件"] == "0.00"
+    assert all(
+        re.fullmatch(r"(?:0\.\d{2}|1\.00)", value)
+        for value in outputs["all_scores"]["scores"].values()
+    )
+
+
+def test_readme_is_copy_paste_ready_for_all_customer_modes(
+    package: PackageFixture,
+) -> None:
+    readme = (package.output / "README.md").read_text(encoding="utf-8")
+
+    assert "python -m pip install -r requirements.txt" in readme
+    assert "--mode selected_only" in readme
+    assert "--mode selected_with_confidence" in readme
+    assert "--mode all_scores" in readme
+    assert "--output predictions.jsonl" in readme
+    assert "4 categories" in readme
+    assert "20 subcategories" in readme
+    assert "57 scores" in readme
+    assert '"confidence": "0.91"' in readme
+    assert '"假两件": "0.00"' in readme
+    assert "JSONL" in readme
 
 
 def test_generated_decode_and_single_weights_contract(
