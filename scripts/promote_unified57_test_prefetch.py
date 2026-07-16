@@ -952,6 +952,16 @@ def _scan_global_conflicts(
         for descriptor in descriptors:
             try:
                 target = os.readlink(descriptor)
+            except FileNotFoundError as error:
+                # /proc is inherently racy: an FD or its owning process can
+                # disappear after enumeration.  Treat only a demonstrably
+                # vanished entry as benign; every persistent inspection error
+                # remains fail-closed.
+                if not process_dir.exists() or not os.path.lexists(descriptor):
+                    continue
+                raise PromotionError(
+                    f"cannot resolve file descriptor {descriptor.name} for PID {pid}"
+                ) from error
             except OSError as error:
                 raise PromotionError(
                     f"cannot resolve file descriptor {descriptor.name} for PID {pid}"
