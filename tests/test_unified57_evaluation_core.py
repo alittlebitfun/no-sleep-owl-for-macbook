@@ -1,4 +1,6 @@
 import json
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -70,6 +72,18 @@ def test_schema_requires_exact_36_20_1_contract():
     bad["label_training_modes"]["无袖"] = "pu"
     with pytest.raises(ValueError, match="36 PN / 20 PU / 1 unsupported"):
         validate_schema(bad)
+
+
+def test_evaluation_core_is_importable_as_a_standalone_delivery_file(tmp_path):
+    source = ROOT / "scripts/unified57_evaluation_core.py"
+    isolated = tmp_path / source.name
+    isolated.write_bytes(source.read_bytes())
+    result = subprocess.run(
+        [sys.executable, "-I", "-c", f"import runpy; runpy.run_path({str(isolated)!r})"],
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr
 
 
 def test_pn_calibration_uses_only_known_cells_and_stable_ties():

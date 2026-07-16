@@ -19,10 +19,16 @@ from collections import Counter, OrderedDict
 from pathlib import Path
 from typing import Any, Callable, Iterable, Mapping, Sequence
 
-try:
-    from scripts.unified56_contract import JD23_TAGS
-except ImportError:  # direct execution with scripts/ as sys.path[0]
-    from unified56_contract import JD23_TAGS  # type: ignore
+# Canonical order from scripts/unified56_contract.py.  Kept local so the
+# evaluator remains a standalone delivery file on remote nodes.
+JD23_TAGS = (
+    "长款", "中款", "短款",
+    "H型", "O型", "X型", "A型", "宽松",
+    "连帽", "毛领", "立领", "翻领", "无领",
+    "压胶充绒", "压胶袋盖", "压胶门襟",
+    "平行绗线", "菱形绗线", "葫芦型绗线", "反光条",
+    "按扣", "腰带", "插肩袖",
+)
 
 
 EXPECTED_MODE_COUNTS = {"pn": 36, "pu": 20, "unsupported": 1}
