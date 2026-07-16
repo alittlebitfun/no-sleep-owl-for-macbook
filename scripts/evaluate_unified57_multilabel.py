@@ -28,6 +28,7 @@ try:
         calibrate_thresholds,
         evaluate_views,
         final_format_predictions,
+        raw_predictions,
         render_all_scores,
         render_selected_only,
         render_selected_with_confidence,
@@ -43,6 +44,7 @@ except ModuleNotFoundError:  # direct invocation from scripts/
         calibrate_thresholds,
         evaluate_views,
         final_format_predictions,
+        raw_predictions,
         render_all_scores,
         render_selected_only,
         render_selected_with_confidence,
@@ -286,18 +288,7 @@ def load_frozen_thresholds(
 
 
 def _classify(metrics: Mapping[str, Any], json_validity_rate: float) -> dict[str, Any]:
-    final = metrics["final_format"]
-    overall = final["overall_36pn"]
-    values = {
-        "known_micro_f1": float(overall["micro"]["f1"]),
-        "jd23_micro_f1": float(final["jd23_clean"]["micro"]["f1"]),
-        "macro_f1": float(overall["macro"]["f1_both_class_labels"]),
-        "dictionary_positive_macro_recall": float(
-            metrics["dictionary_all_positive"]["macro_positive_recall"]
-        ),
-        "trusted_negative_specificity": float(overall["trusted_negatives"]["specificity"]),
-        "json_validity_rate": float(json_validity_rate),
-    }
+    values = _performance_values(metrics, "final_format", json_validity_rate)
     gates = {
         "known_micro_f1": values["known_micro_f1"] >= 0.88,
         "jd23_micro_f1": values["jd23_micro_f1"] >= 0.88,
@@ -315,10 +306,29 @@ def _classify(metrics: Mapping[str, Any], json_validity_rate: float) -> dict[str
     return {"verdict": verdict, "values": values, "success_gates": gates}
 
 
+def _performance_values(
+    metrics: Mapping[str, Any], view_name: str, json_validity_rate: float
+) -> dict[str, float]:
+    view = metrics[view_name]
+    overall = view["overall_36pn"]
+    return {
+        "known_micro_f1": float(overall["micro"]["f1"]),
+        "jd23_micro_f1": float(view["jd23_clean"]["micro"]["f1"]),
+        "macro_f1": float(overall["macro"]["f1_both_class_labels"]),
+        "dictionary_positive_macro_recall": float(
+            metrics["dictionary_all_positive"][view_name]["macro_positive_recall"]
+        ),
+        "trusted_negative_specificity": float(overall["trusted_negatives"]["specificity"]),
+        "json_validity_rate": float(json_validity_rate),
+    }
+
+
 def evaluate_dictionary_positive_recall(
     rows: Sequence[Mapping[str, Any]],
     thresholds: Mapping[str, Any],
     schema: Mapping[str, Any],
+    *,
+    final_format: bool = True,
 ) -> dict[str, Any]:
     """Macro recall over every dictionary-supported PN and PU tag.
 
@@ -326,7 +336,8 @@ def evaluate_dictionary_positive_recall(
     from ``pu_positive_mask``. Unlabeled cells never enter this metric.
     """
 
-    predictions = [final_format_predictions(row["scores"], thresholds, schema) for row in rows]
+    prediction_function = final_format_predictions if final_format else raw_predictions
+    predictions = [prediction_function(row["scores"], thresholds, schema) for row in rows]
     dictionary_pairs = [
         (row, prediction)
         for row, prediction in zip(rows, predictions)
@@ -389,9 +400,14 @@ def write_delivery_outputs(
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     metrics = evaluate_views(rows, thresholds, schema)
-    metrics["dictionary_all_positive"] = evaluate_dictionary_positive_recall(
-        rows, thresholds, schema
-    )
+    metrics["dictionary_all_positive"] = {
+        "raw_thresholded": evaluate_dictionary_positive_recall(
+            rows, thresholds, schema, final_format=False
+        ),
+        "final_format": evaluate_dictionary_positive_recall(
+            rows, thresholds, schema, final_format=True
+        ),
+    }
     threshold_items = thresholds.get("labels", {})
     pu_fallback = [
         tag
@@ -428,25 +444,52 @@ def write_delivery_outputs(
     _atomic_jsonl(selected_only, output_dir / "test_selected_only.jsonl")
     _atomic_jsonl(selected_confidence, output_dir / "test_selected_with_confidence.jsonl")
 
+    manifest_indices = {str(row["record_id"]): index for index, row in enumerate(rows)}
     verification_rows = select_verification_records(rows, count=32, seed=20260717)
     verification_dir = output_dir / "verification"
     verification_dir.mkdir(parents=True, exist_ok=True)
+    def source_name(row: Mapping[str, Any]) -> str:
+        return str(row.get("source") or "+".join(row.get("sources", [])))
+
+    def selection_bucket(row: Mapping[str, Any]) -> str:
+        sources = set(row.get("sources", []))
+        source_bucket = (
+            "mixed" if len(sources) > 1 else "dictionary" if "dictionary_v4" in sources else "jd"
+        )
+        ratio = row.get("aspect_ratio")
+        if ratio is None and row.get("width") and row.get("height"):
+            ratio = float(row["width"]) / float(row["height"])
+        aspect = "unknown" if ratio is None else "portrait" if float(ratio) < 0.8 else "landscape" if float(ratio) > 1.25 else "square"
+        return f"{source_bucket}:{aspect}"
+
     verification_manifest = [
         {
-            key: row[key]
-            for key in ("record_id", "image_path", "image_sha256", "sources")
-            if key in row
+            "record_id": row["record_id"],
+            "test_manifest_index": manifest_indices[str(row["record_id"])],
+            "image_path": row.get("image_path"),
+            "image_sha256": row.get("image_sha256"),
+            "source": source_name(row),
+            "sources": list(row.get("sources", [])),
+            "selection_bucket": selection_bucket(row),
         }
         for row in verification_rows
     ]
-    reference_float = [
-        {"record_id": row["record_id"], "scores": [float(value) for value in row["scores"]]}
-        for row in verification_rows
-    ]
+    float_fields = (
+        "record_id", "image_path", "image_sha256", "source", "sources", "width", "height",
+        "aspect_ratio", "labels", "known_mask", "pu_positive_mask", "schema_version",
+        "schema_sha256", "checkpoint_sha256",
+    )
+    reference_float = []
+    for row in verification_rows:
+        item = {field: row.get(field) for field in float_fields}
+        item["source"] = source_name(row)
+        item["sources"] = list(row.get("sources", []))
+        item["scores"] = [float(value) for value in row["scores"]]
+        reference_float.append(item)
     reference_selected = [
         {
             "record_id": row["record_id"],
-            "selected": render_selected_only(row["scores"], thresholds, schema),
+            "output": render_selected_only(row["scores"], thresholds, schema),
         }
         for row in verification_rows
     ]
@@ -460,6 +503,29 @@ def write_delivery_outputs(
     image_dir.mkdir(parents=True, exist_ok=True)
     representative_manifest: list[dict[str, Any]] = []
     for index, row in enumerate(representatives, 1):
+        binary = final_format_predictions(row["scores"], thresholds, schema)
+        pn_positive = [
+            tag for label_index, tag in enumerate(schema["labels"])
+            if schema["label_training_modes"][tag] == "pn"
+            and bool(row["known_mask"][label_index]) and float(row["labels"][label_index]) == 1.0
+        ]
+        pn_false_negative = [
+            tag for label_index, tag in enumerate(schema["labels"])
+            if schema["label_training_modes"][tag] == "pn"
+            and bool(row["known_mask"][label_index]) and float(row["labels"][label_index]) == 1.0
+            and not binary[label_index]
+        ]
+        pn_false_positive = [
+            tag for label_index, tag in enumerate(schema["labels"])
+            if schema["label_training_modes"][tag] == "pn"
+            and bool(row["known_mask"][label_index]) and float(row["labels"][label_index]) == 0.0
+            and binary[label_index]
+        ]
+        pu_positive = [
+            tag for label_index, tag in enumerate(schema["labels"])
+            if bool(row["pu_positive_mask"][label_index])
+        ]
+        pu_hits = [tag for tag in pu_positive if binary[schema["labels"].index(tag)]]
         entry = {
             "record_id": row["record_id"],
             "image_path": row.get("image_path"),
@@ -467,6 +533,23 @@ def write_delivery_outputs(
             "sources": row.get("sources"),
             "selected": render_selected_only(row["scores"], thresholds, schema),
             "all_scores": render_all_scores(row, schema)["scores"],
+            "truth_summary": {
+                "pn_known_positive": pn_positive,
+                "pn_known_negative_count": sum(
+                    bool(known) and float(label) == 0.0
+                    for known, label in zip(row["known_mask"], row["labels"])
+                ),
+                "pu_positive": pu_positive,
+            },
+            "pn_errors": {
+                "false_negative": pn_false_negative,
+                "false_positive": pn_false_positive,
+            },
+            "pu_positive_hits": {
+                "hit": pu_hits,
+                "missed": [tag for tag in pu_positive if tag not in pu_hits],
+                "note": "PU unlabeled cells are excluded from accuracy/precision/F1",
+            },
         }
         source_path = Path(str(row.get("image_path", "")))
         if source_path.is_file():
@@ -485,10 +568,25 @@ def write_delivery_outputs(
         "unsupported_user_score": "0.00",
     }
     classification = _classify(metrics, output_quality["json_validity_rate"])
+    raw_performance = _performance_values(
+        metrics, "raw_thresholded", output_quality["json_validity_rate"]
+    )
+    final_performance = _performance_values(
+        metrics, "final_format", output_quality["json_validity_rate"]
+    )
+    performance = {
+        "raw_thresholded": raw_performance,
+        "final_format": final_performance,
+        "final_minus_raw": {
+            key: final_performance[key] - raw_performance[key] for key in raw_performance
+        },
+        "verdict_basis": "final_format",
+    }
     report = {
         "metrics": metrics,
         "output_quality": output_quality,
         "classification": classification,
+        "performance": performance,
         "verification": {"records": 32, "score_values": 32 * 57},
         "representative_records": 6,
     }
@@ -503,6 +601,8 @@ class EvaluationCollator:
         self.image_max_pixels = image_max_pixels
 
     def __call__(self, records: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+        from PIL import Image
+
         try:
             from scripts.train_unified57_qwen3vl_multilabel import (
                 VISION_PROMPT,
@@ -513,17 +613,34 @@ class EvaluationCollator:
                 VISION_PROMPT,
                 _open_training_image,
             )
-        images = [
-            _open_training_image(record, self.manifest_parent, self.image_max_pixels)
-            for record in records
-        ]
+        metadata_rows: list[dict[str, Any]] = []
+        images = []
+        for record in records:
+            enriched = dict(record)
+            image_value = record.get("image_path") or record.get("local_image_path")
+            if image_value:
+                image_path = Path(str(image_value))
+                if not image_path.is_absolute():
+                    image_path = self.manifest_parent / image_path
+                with Image.open(image_path) as source:
+                    width, height = source.size
+                enriched["width"] = int(width)
+                enriched["height"] = int(height)
+                enriched["aspect_ratio"] = float(width) / float(height) if height else None
+            image = _open_training_image(record, self.manifest_parent, self.image_max_pixels)
+            if "width" not in enriched:
+                enriched["width"] = int(image.width)
+                enriched["height"] = int(image.height)
+                enriched["aspect_ratio"] = float(image.width) / float(image.height) if image.height else None
+            metadata_rows.append(enriched)
+            images.append(image)
         batch = self.processor(
             images=images,
             text=[VISION_PROMPT] * len(records),
             padding=True,
             return_tensors="pt",
         )
-        batch["metadata"] = list(records)
+        batch["metadata"] = metadata_rows
         return batch
 
 
@@ -837,6 +954,17 @@ def main(argv: Sequence[str] | None = None) -> int:
                 delivery = write_delivery_outputs(
                     test_predictions or [], thresholds, schema, args.output_dir
                 )
+                validation_metrics = evaluate_views(
+                    validation_predictions or [], thresholds, schema
+                )
+                validation_metrics["dictionary_all_positive"] = {
+                    "raw_thresholded": evaluate_dictionary_positive_recall(
+                        validation_predictions or [], thresholds, schema, final_format=False
+                    ),
+                    "final_format": evaluate_dictionary_positive_recall(
+                        validation_predictions or [], thresholds, schema, final_format=True
+                    ),
+                }
                 test_contract = json.loads(
                     (args.output_dir / "test_run_contract.json").read_text(encoding="utf-8")
                 )
@@ -845,6 +973,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 status = delivery["classification"]["verdict"]
             else:
                 delivery = None
+                validation_metrics = None
                 status = "partial"
             environment = {
                 "hostname": socket.gethostname(),
@@ -855,18 +984,26 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "world_size": world_size,
                 "gpu_names": [torch.cuda.get_device_name(index) for index in range(torch.cuda.device_count())],
             }
+            provenance = {
+                **contract,
+                "schema_file_sha256": args.schema_file_sha256,
+                "model_config_sha256": args.model_config_sha256,
+                "model_path": args.model,
+                "checkpoint_path": str(args.checkpoint),
+                "validation_manifest": str(args.validation_manifest),
+                "test_manifest": str(args.test_manifest),
+                "validation_predictions_sha256": sha256_file(
+                    args.output_dir / "validation_predictions_float32.jsonl"
+                ),
+                "test_predictions_sha256": sha256_file(
+                    args.output_dir / "test_predictions_float32.jsonl"
+                ),
+                "thresholds_sha256": threshold_sha,
+            }
             report = {
                 "report_version": REPORT_VERSION,
                 "status": status,
-                "contracts": {
-                    **contract,
-                    "schema_file_sha256": args.schema_file_sha256,
-                    "model_config_sha256": args.model_config_sha256,
-                    "model_path": args.model,
-                    "checkpoint_path": str(args.checkpoint),
-                    "validation_manifest": str(args.validation_manifest),
-                    "test_manifest": str(args.test_manifest),
-                },
+                "provenance": provenance,
                 "checkpoint": {
                     "global_step": int(checkpoint_metadata.get("cursor", {}).get("global_step", 0)),
                     "format_version": checkpoint_metadata.get("format_version"),
@@ -880,7 +1017,39 @@ def main(argv: Sequence[str] | None = None) -> int:
                     "deadline_reached": time.monotonic() >= deadline,
                 },
                 "environment": environment,
-                "delivery": delivery,
+                "thresholds": thresholds,
+                "raw_thresholded": (
+                    delivery["metrics"]["raw_thresholded"] if delivery else None
+                ),
+                "final_format": (
+                    delivery["metrics"]["final_format"] if delivery else None
+                ),
+                "format_constraint_loss": (
+                    delivery["metrics"]["format_constraint_loss"] if delivery else None
+                ),
+                "threshold_calibration": (
+                    delivery["metrics"]["threshold_calibration"] if delivery else None
+                ),
+                "dictionary_all_positive": (
+                    delivery["metrics"]["dictionary_all_positive"] if delivery else None
+                ),
+                "performance": delivery["performance"] if delivery else None,
+                "classification": delivery["classification"] if delivery else None,
+                "output_quality": delivery["output_quality"] if delivery else None,
+                "validation_metrics": validation_metrics,
+                "reproduction_32": {
+                    "status": "pending_package_seal" if test_complete else "blocked_incomplete_test",
+                    "records": 32 if test_complete else 0,
+                    "score_values": 32 * 57 if test_complete else 0,
+                    "reference_float32": "verification/reference_32_float32.jsonl",
+                    "reference_selected_only": "verification/reference_32_selected_only.jsonl",
+                    "note": "Exact replay is measured by the sealed delivery package; evaluator only freezes references.",
+                },
+                "representative_6": {
+                    "records": 6 if test_complete else 0,
+                    "manifest": "representative6/manifest.jsonl",
+                    "images": "representative6/images/",
+                },
                 "process_cleanup": {"distributed_barrier_reached": True, "unrelated_processes_touched": 0},
             }
             _atomic_json(report, args.output_dir / "evaluation_report.json")

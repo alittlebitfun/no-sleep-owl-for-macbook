@@ -123,10 +123,31 @@ def test_render_delivery_outputs_masks_unsupported_and_builds_references(tmp_pat
     report = write_delivery_outputs(rows, thresholds, schema, tmp_path)
     assert report["output_quality"]["json_validity_rate"] == 1.0
     assert report["verification"]["records"] == 32
+    assert "raw_thresholded" in report["performance"]
+    assert "final_format" in report["performance"]
     first = json.loads((tmp_path / "test_all_scores.jsonl").read_text().splitlines()[0])
     assert first["scores"]["假两件"] == "0.00"
+    verification_manifest = json.loads(
+        (tmp_path / "verification" / "verification_32_manifest.jsonl").read_text().splitlines()[0]
+    )
+    assert set(verification_manifest) == {
+        "record_id", "test_manifest_index", "image_path", "image_sha256",
+        "source", "sources", "selection_bucket",
+    }
+    float_reference = json.loads(
+        (tmp_path / "verification" / "reference_32_float32.jsonl").read_text().splitlines()[0]
+    )
+    assert {"scores", "labels", "known_mask", "pu_positive_mask", "schema_sha256", "checkpoint_sha256"} <= set(float_reference)
+    selected_reference = json.loads(
+        (tmp_path / "verification" / "reference_32_selected_only.jsonl").read_text().splitlines()[0]
+    )
+    assert set(selected_reference) == {"record_id", "output"}
     assert len((tmp_path / "verification" / "reference_32_float32.jsonl").read_text().splitlines()) == 32
     assert len((tmp_path / "representative6" / "manifest.jsonl").read_text().splitlines()) == 6
+    representative = json.loads(
+        (tmp_path / "representative6" / "manifest.jsonl").read_text().splitlines()[0]
+    )
+    assert {"truth_summary", "pn_errors", "pu_positive_hits"} <= set(representative)
 
 
 def test_dictionary_macro_recall_combines_pn_and_pu_positives():
