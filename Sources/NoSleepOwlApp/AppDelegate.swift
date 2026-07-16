@@ -46,6 +46,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if ProcessInfo.processInfo.arguments.contains("--open-window") {
             windowController.show()
         }
+        if ProcessInfo.processInfo.arguments.contains("--open-settings") {
+            settingsController.show()
+        }
         safetyMonitor.start()
         thermalMonitor.start()
     }
