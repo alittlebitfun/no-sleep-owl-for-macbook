@@ -1018,12 +1018,15 @@ def _render_selected(
 ) -> dict[str, list[str]]:
     positions = {tag: index for index, tag in enumerate(schema["labels"])}
     return {
-        category: [
-            tag
-            for tags in subcategories.values()
-            for tag in tags
-            if tag != UNSUPPORTED_TAG and final[positions[tag]]
-        ]
+        category: sorted(
+            (
+                tag
+                for tags in subcategories.values()
+                for tag in tags
+                if tag != UNSUPPORTED_TAG and final[positions[tag]]
+            ),
+            key=positions.__getitem__,
+        )
         for category, subcategories in schema["semantic_categories"].items()
     }
 
