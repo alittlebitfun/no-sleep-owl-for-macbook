@@ -27,6 +27,7 @@ final class StatusItemController: NSObject {
             button.sendAction(on: [.leftMouseUp, .rightMouseUp])
             button.imageScaling = .scaleProportionallyDown
             button.contentTintColor = .white
+            button.font = .systemFont(ofSize: 14)
         }
         statusItem.isVisible = true
         refresh()
@@ -35,9 +36,12 @@ final class StatusItemController: NSObject {
     func refresh() {
         let presentation = BirdPresentation(mode: store.mode, language: preferences.snapshot.language)
         let strings = AppStrings(language: preferences.snapshot.language)
-        statusItem.button?.title = ""
+        // Keep a textual fallback alongside the template symbol. On some macOS
+        // releases SF Symbols can be hidden by menu-bar tinting or contrast
+        // settings; the emoji guarantees a visible status item.
+        statusItem.button?.title = presentation.emoji
         statusItem.button?.image = BirdIconRenderer.image(for: store.mode, language: preferences.snapshot.language)
-        statusItem.button?.imagePosition = .imageOnly
+        statusItem.button?.imagePosition = .imageLeading
         statusItem.button?.toolTip = "\(strings.appName) · \(presentation.statusTitle)"
     }
 
