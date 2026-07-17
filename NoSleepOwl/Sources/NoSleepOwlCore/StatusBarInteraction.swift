@@ -22,6 +22,10 @@ public enum StatusItemPlacementPolicy {
     public static let persistsCustomPosition = false
 }
 
+public enum ApplicationReopenPolicy {
+    public static let opensControlWindow = true
+}
+
 public enum StatusMenuPolicy {
     public static let includesSettings = true
 }

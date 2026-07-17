@@ -138,6 +138,10 @@ test("primary menu bar click opens the control window") {
     try expect(StatusBarInteraction.action(for: .primary) == .openControlWindow, "primary click must open window")
 }
 
+test("reopening the menu bar app opens the control window") {
+    try expect(ApplicationReopenPolicy.opensControlWindow, "reopening an existing app must reveal its window")
+}
+
 test("secondary menu bar click opens the context menu") {
     try expect(StatusBarInteraction.action(for: .secondary) == .showContextMenu, "secondary click must show menu")
 }
@@ -291,7 +295,7 @@ test("helper disable restores original value") {
     try expect(helper.isEnabled == false, "helper must be disabled")
 }
 
-test("release metadata identifies version 0.1.0 build 5") {
+test("release metadata identifies version 0.1.0 build 6") {
     guard let root = ProcessInfo.processInfo.environment["NO_SLEEP_OWL_ROOT"] else {
         throw TestError.expectation("NO_SLEEP_OWL_ROOT must point to the repository root")
     }
@@ -301,7 +305,7 @@ test("release metadata identifies version 0.1.0 build 5") {
         throw TestError.expectation("Info.plist must contain a dictionary")
     }
     try expect(metadata["CFBundleShortVersionString"] as? String == "0.1.0", "release version must be 0.1.0")
-    try expect(metadata["CFBundleVersion"] as? String == "5", "release build must be 5")
+    try expect(metadata["CFBundleVersion"] as? String == "6", "release build must be 6")
 }
 
 if failures > 0 {
