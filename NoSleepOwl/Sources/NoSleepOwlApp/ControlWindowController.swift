@@ -115,10 +115,6 @@ final class ControlWindowController: NSObject, NSWindowDelegate {
         tabBar.alignment = .centerY
         tabBar.spacing = 8
         tabBar.distribution = .fill
-        let homeLabel = NSTextField(labelWithString: "主页")
-        homeLabel.font = .systemFont(ofSize: 13, weight: .semibold)
-        homeLabel.textColor = .secondaryLabelColor
-        tabBar.insertView(homeLabel, at: 0, in: .leading)
         let stack = NSStackView(views: [tabBar, emoji, titleLabel, detailLabel, durationLabel, toggleButton, thermalView, helperLabel, helperButton, batteryButton, loginButton, errorLabel])
         stack.orientation = .vertical
         stack.alignment = .centerX

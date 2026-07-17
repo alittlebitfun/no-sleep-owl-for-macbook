@@ -88,9 +88,10 @@ final class StatusItemController: NSObject {
         if let sender, let event {
             NSMenu.popUpContextMenu(menu, with: event, for: sender)
         } else {
-            statusItem.menu = menu
-            statusItem.button?.performClick(nil)
-            statusItem.menu = nil
+            guard let button = statusItem.button else { return }
+            // Pop the menu from the real status-item button so AppKit anchors it
+            // above the menu bar icon, like other menu-bar utilities.
+            menu.popUp(positioning: nil, at: NSPoint(x: button.bounds.midX, y: button.bounds.minY), in: button)
         }
     }
 
