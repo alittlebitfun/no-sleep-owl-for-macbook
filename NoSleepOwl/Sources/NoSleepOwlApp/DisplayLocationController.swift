@@ -24,15 +24,11 @@ final class DisplayLocationController {
 
     func apply(_ snapshot: AppPreferenceSnapshot) {
         NSApp.setActivationPolicy(snapshot.showsDockIcon ? .regular : .accessory)
-        if snapshot.showsStatusBarIcon {
-            if statusController == nil {
-                statusController = StatusItemController(store: store, launchController: launchController, thermalMonitor: thermalMonitor, preferences: preferences, openWindow: openWindow, openSettings: openSettings, quit: quit)
-            } else {
-                statusController?.refresh()
-            }
-        } else {
-            statusController = nil
+        if statusController == nil {
+            statusController = StatusItemController(store: store, launchController: launchController, thermalMonitor: thermalMonitor, preferences: preferences, openWindow: openWindow, openSettings: openSettings, quit: quit)
         }
+        statusController?.refresh()
+        statusController?.setVisible(snapshot.showsStatusBarIcon)
     }
 
     func refreshStatusItem() { statusController?.refresh() }

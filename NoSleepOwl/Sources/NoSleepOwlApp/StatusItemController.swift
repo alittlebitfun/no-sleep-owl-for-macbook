@@ -45,6 +45,10 @@ final class StatusItemController: NSObject {
         statusItem.button?.toolTip = "\(strings.appName) · \(presentation.statusTitle)"
     }
 
+    func setVisible(_ visible: Bool) {
+        statusItem.isVisible = visible
+    }
+
     @objc private func clicked(_ sender: Any?) {
         // Match the familiar menu-bar utility interaction: either mouse button
         // opens the same menu anchored above the status item.
