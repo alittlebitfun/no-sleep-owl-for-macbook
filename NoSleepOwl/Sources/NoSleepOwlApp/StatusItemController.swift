@@ -25,6 +25,8 @@ final class StatusItemController: NSObject {
             button.target = self
             button.action = #selector(clicked(_:))
             button.sendAction(on: [.leftMouseUp, .rightMouseUp])
+            button.imageScaling = .scaleProportionallyDown
+            button.contentTintColor = .white
         }
         statusItem.isVisible = true
         refresh()
