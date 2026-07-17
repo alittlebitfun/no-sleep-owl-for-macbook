@@ -10,7 +10,7 @@ final class StatusItemController: NSObject {
     private let openWindow: () -> Void
     private let openSettings: () -> Void
     private let quit: () -> Void
-    private let statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+    private let statusItem = NSStatusBar.system.statusItem(withLength: 32)
 
     init(store: OwlModeStore, launchController: LaunchAtLoginController, thermalMonitor: ThermalAppMonitor, preferences: AppPreferences, openWindow: @escaping () -> Void, openSettings: @escaping () -> Void, quit: @escaping () -> Void) {
         self.store = store
@@ -39,9 +39,11 @@ final class StatusItemController: NSObject {
         // Keep a textual fallback alongside the template symbol. On some macOS
         // releases SF Symbols can be hidden by menu-bar tinting or contrast
         // settings; the emoji guarantees a visible status item.
-        statusItem.button?.title = "  (presentation.emoji)"
+        statusItem.button?.title = "  \(presentation.emoji)"
         statusItem.button?.image = nil
         statusItem.button?.imagePosition = .noImage
+        statusItem.length = 32
+        statusItem.isVisible = true
         statusItem.button?.setAccessibilityLabel(strings.appName)
         statusItem.button?.toolTip = "\(strings.appName) · \(presentation.statusTitle)"
     }
