@@ -20,7 +20,7 @@ final class ControlWindowController: NSObject, NSWindowDelegate {
     private let batteryButton = NSButton(checkboxWithTitle: "使用电池时也允许合盖守夜", target: nil, action: nil)
     private let helperLabel = NSTextField(labelWithString: "")
     private let helperButton = NSButton(title: "安装 / 批准辅助程序", target: nil, action: nil)
-    private let settingsButton = NSButton(title: "设置…", target: nil, action: nil)
+    private let settingsButton = NSButton(title: "设置", target: nil, action: nil)
     var onOpenSettings: (() -> Void)?
     var onVisibilityChange: ((Bool) -> Void)?
     private let thermalView = ThermalStatusView()
@@ -110,7 +110,16 @@ final class ControlWindowController: NSObject, NSWindowDelegate {
         settingsButton.action = #selector(openSettings)
 
         thermalView.onTerminate = { [weak thermalMonitor] pid in thermalMonitor?.terminate(pid: pid) }
-        let stack = NSStackView(views: [settingsButton, emoji, titleLabel, detailLabel, durationLabel, toggleButton, thermalView, helperLabel, helperButton, batteryButton, loginButton, errorLabel])
+        let tabBar = NSStackView(views: [settingsButton])
+        tabBar.orientation = .horizontal
+        tabBar.alignment = .centerY
+        tabBar.spacing = 8
+        tabBar.distribution = .fill
+        let homeLabel = NSTextField(labelWithString: "主页")
+        homeLabel.font = .systemFont(ofSize: 13, weight: .semibold)
+        homeLabel.textColor = .secondaryLabelColor
+        tabBar.insertView(homeLabel, at: 0, in: .leading)
+        let stack = NSStackView(views: [tabBar, emoji, titleLabel, detailLabel, durationLabel, toggleButton, thermalView, helperLabel, helperButton, batteryButton, loginButton, errorLabel])
         stack.orientation = .vertical
         stack.alignment = .centerX
         stack.spacing = 18
@@ -124,6 +133,7 @@ final class ControlWindowController: NSObject, NSWindowDelegate {
             stack.topAnchor.constraint(equalTo: window.contentView!.topAnchor),
             stack.bottomAnchor.constraint(lessThanOrEqualTo: window.contentView!.bottomAnchor),
             detailLabel.widthAnchor.constraint(lessThanOrEqualToConstant: 390),
+            tabBar.widthAnchor.constraint(equalToConstant: 260),
             toggleButton.widthAnchor.constraint(equalToConstant: 260),
             toggleButton.heightAnchor.constraint(equalToConstant: 44)
         ])

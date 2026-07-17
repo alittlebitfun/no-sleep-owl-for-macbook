@@ -42,11 +42,9 @@ final class StatusItemController: NSObject {
     }
 
     @objc private func clicked(_ sender: Any?) {
-        if NSApp.currentEvent?.type == .rightMouseUp {
-            showMenu(from: nil, event: NSApp.currentEvent)
-        } else {
-            handle(.primary)
-        }
+        // Match the familiar menu-bar utility interaction: either mouse button
+        // opens the same menu anchored above the status item.
+        showMenu(from: nil, event: NSApp.currentEvent)
     }
 
     private func handle(_ mouseButton: StatusBarMouseButton) {

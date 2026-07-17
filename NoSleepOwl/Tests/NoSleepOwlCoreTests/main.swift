@@ -305,7 +305,7 @@ test("helper disable restores original value") {
     try expect(helper.isEnabled == false, "helper must be disabled")
 }
 
-test("release metadata identifies version 0.1.0 build 9") {
+test("release metadata identifies version 0.1.1 build 10") {
     guard let root = ProcessInfo.processInfo.environment["NO_SLEEP_OWL_ROOT"] else {
         throw TestError.expectation("NO_SLEEP_OWL_ROOT must point to the repository root")
     }
@@ -314,8 +314,8 @@ test("release metadata identifies version 0.1.0 build 9") {
     guard let metadata = try PropertyListSerialization.propertyList(from: plistData, format: nil) as? [String: Any] else {
         throw TestError.expectation("Info.plist must contain a dictionary")
     }
-    try expect(metadata["CFBundleShortVersionString"] as? String == "0.1.0", "release version must be 0.1.0")
-    try expect(metadata["CFBundleVersion"] as? String == "9", "release build must be 9")
+    try expect(metadata["CFBundleShortVersionString"] as? String == "0.1.1", "release version must be 0.1.1")
+    try expect(metadata["CFBundleVersion"] as? String == "10", "release build must be 10")
 }
 
 if failures > 0 {
