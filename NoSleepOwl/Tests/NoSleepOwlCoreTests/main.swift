@@ -28,7 +28,7 @@ private func isolatedDefaults() -> UserDefaults {
 
 test("preferences default to Chinese with both monitors visible") {
     let preferences = AppPreferences(defaults: isolatedDefaults())
-    try expect(preferences.snapshot == AppPreferenceSnapshot(language: .zhHans, showsThermalStatus: true, showsHighUsageApps: true), "wrong defaults")
+    try expect(preferences.snapshot == AppPreferenceSnapshot(language: .zhHans, showsThermalStatus: true, showsHighUsageApps: true, showsStatusBarIcon: true, showsDockIcon: false), "wrong defaults")
 }
 
 test("preferences persist and unknown language falls back to Chinese") {
@@ -37,7 +37,9 @@ test("preferences persist and unknown language falls back to Chinese") {
     preferences.setLanguage(.en)
     preferences.setShowsThermalStatus(false)
     preferences.setShowsHighUsageApps(false)
-    try expect(AppPreferences(defaults: defaults).snapshot == AppPreferenceSnapshot(language: .en, showsThermalStatus: false, showsHighUsageApps: false), "preferences did not persist")
+    preferences.setShowsStatusBarIcon(false)
+    preferences.setShowsDockIcon(true)
+    try expect(AppPreferences(defaults: defaults).snapshot == AppPreferenceSnapshot(language: .en, showsThermalStatus: false, showsHighUsageApps: false, showsStatusBarIcon: false, showsDockIcon: true), "preferences did not persist")
     defaults.set("unknown", forKey: AppPreferences.Keys.language)
     try expect(AppPreferences(defaults: defaults).snapshot.language == .zhHans, "unknown language must fall back")
 }
@@ -53,6 +55,8 @@ test("English strings cover settings and monitoring") {
     let strings = AppStrings(language: .en)
     try expect(strings.settingsMenuTitle == "Settings…", "settings title")
     try expect(strings.showThermalStatus == "Show thermal status", "thermal setting")
+    try expect(strings.showStatusBarIcon == "Show menu bar icon", "status bar setting")
+    try expect(strings.showDockIcon == "Show Dock icon", "dock setting")
     try expect(BirdPresentation(mode: .owl, language: .en).statusTitle == "Owl is keeping watch", "owl title")
     try expect(ThermalPresentation(state: .serious, language: .en).title == "Serious", "thermal title")
 }
@@ -140,6 +144,12 @@ test("primary menu bar click opens the control window") {
 
 test("reopening the menu bar app opens the control window") {
     try expect(ApplicationReopenPolicy.opensControlWindow, "reopening an existing app must reveal its window")
+}
+
+test("display location policy maps dock visibility") {
+    try expect(DisplayLocationPolicy.activationPolicy(showsDockIcon: false) == "accessory", "dock hidden policy")
+    try expect(DisplayLocationPolicy.activationPolicy(showsDockIcon: true) == "regular", "dock visible policy")
+    try expect(DisplayLocationPolicy.keepsProcessAliveWhenHidden, "both icons hidden must keep process alive")
 }
 
 test("secondary menu bar click opens the context menu") {
@@ -295,7 +305,7 @@ test("helper disable restores original value") {
     try expect(helper.isEnabled == false, "helper must be disabled")
 }
 
-test("release metadata identifies version 0.1.0 build 7") {
+test("release metadata identifies version 0.1.0 build 8") {
     guard let root = ProcessInfo.processInfo.environment["NO_SLEEP_OWL_ROOT"] else {
         throw TestError.expectation("NO_SLEEP_OWL_ROOT must point to the repository root")
     }
@@ -305,7 +315,7 @@ test("release metadata identifies version 0.1.0 build 7") {
         throw TestError.expectation("Info.plist must contain a dictionary")
     }
     try expect(metadata["CFBundleShortVersionString"] as? String == "0.1.0", "release version must be 0.1.0")
-    try expect(metadata["CFBundleVersion"] as? String == "7", "release build must be 7")
+    try expect(metadata["CFBundleVersion"] as? String == "8", "release build must be 8")
 }
 
 if failures > 0 {

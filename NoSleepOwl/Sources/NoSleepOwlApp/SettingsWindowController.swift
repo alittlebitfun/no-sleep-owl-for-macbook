@@ -9,6 +9,8 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
     private let languagePopup = NSPopUpButton()
     private let thermalButton = NSButton(checkboxWithTitle: "", target: nil, action: nil)
     private let applicationsButton = NSButton(checkboxWithTitle: "", target: nil, action: nil)
+    private let statusBarButton = NSButton(checkboxWithTitle: "", target: nil, action: nil)
+    private let dockButton = NSButton(checkboxWithTitle: "", target: nil, action: nil)
 
     init(preferences: AppPreferences) {
         self.preferences = preferences
@@ -43,6 +45,10 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
         thermalButton.state = snapshot.showsThermalStatus ? .on : .off
         applicationsButton.title = strings.showHighUsageApps
         applicationsButton.state = snapshot.showsHighUsageApps ? .on : .off
+        statusBarButton.title = strings.showStatusBarIcon
+        statusBarButton.state = snapshot.showsStatusBarIcon ? .on : .off
+        dockButton.title = strings.showDockIcon
+        dockButton.state = snapshot.showsDockIcon ? .on : .off
     }
 
     private func buildUI() {
@@ -53,6 +59,10 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
         thermalButton.action = #selector(changeThermal)
         applicationsButton.target = self
         applicationsButton.action = #selector(changeApplications)
+        statusBarButton.target = self
+        statusBarButton.action = #selector(changeStatusBar)
+        dockButton.target = self
+        dockButton.action = #selector(changeDock)
 
         let languageRow = NSStackView(views: [languageLabel, languagePopup])
         languageRow.orientation = .horizontal
@@ -62,7 +72,7 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
 
         let separator = NSBox()
         separator.boxType = .separator
-        let stack = NSStackView(views: [languageRow, separator, thermalButton, applicationsButton])
+        let stack = NSStackView(views: [languageRow, separator, thermalButton, applicationsButton, statusBarButton, dockButton])
         stack.orientation = .vertical
         stack.alignment = .leading
         stack.spacing = 22
@@ -81,4 +91,6 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
     @objc private func changeLanguage() { preferences.setLanguage(languagePopup.indexOfSelectedItem == 0 ? .zhHans : .en) }
     @objc private func changeThermal() { preferences.setShowsThermalStatus(thermalButton.state == .on) }
     @objc private func changeApplications() { preferences.setShowsHighUsageApps(applicationsButton.state == .on) }
+    @objc private func changeStatusBar() { preferences.setShowsStatusBarIcon(statusBarButton.state == .on) }
+    @objc private func changeDock() { preferences.setShowsDockIcon(dockButton.state == .on) }
 }

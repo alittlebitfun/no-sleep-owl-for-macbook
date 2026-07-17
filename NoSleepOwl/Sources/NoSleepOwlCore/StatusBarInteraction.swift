@@ -26,6 +26,14 @@ public enum ApplicationReopenPolicy {
     public static let opensControlWindow = true
 }
 
+public enum DisplayLocationPolicy {
+    public static func activationPolicy(showsDockIcon: Bool) -> String {
+        showsDockIcon ? "regular" : "accessory"
+    }
+
+    public static let keepsProcessAliveWhenHidden = true
+}
+
 public enum StatusMenuPolicy {
     public static let includesSettings = true
 }

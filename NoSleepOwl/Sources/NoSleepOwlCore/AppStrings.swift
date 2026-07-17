@@ -14,6 +14,8 @@ public struct AppStrings: Sendable {
     public var english: String { "English" }
     public var showThermalStatus: String { value("显示电脑热状态", "Show thermal status") }
     public var showHighUsageApps: String { value("显示高占用应用", "Show high-usage applications") }
+    public var showStatusBarIcon: String { value("显示状态栏图标", "Show menu bar icon") }
+    public var showDockIcon: String { value("显示 Dock 图标", "Show Dock icon") }
     public var loginAtStartup: String { value("登录时自动启动", "Launch at Login") }
     public var allowBattery: String { value("使用电池时也允许合盖守夜", "Allow closed-lid watch on battery") }
     public var installHelper: String { value("安装 / 批准辅助程序", "Install / Approve Helper") }
