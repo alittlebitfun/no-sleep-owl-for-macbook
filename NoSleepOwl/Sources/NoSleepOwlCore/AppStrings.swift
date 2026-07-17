@@ -6,9 +6,9 @@ public struct AppStrings: Sendable {
 
     private func value(_ zh: String, _ en: String) -> String { language == .zhHans ? zh : en }
 
-    public var appName: String { value("不休眠猫头鹰", "No Sleep Owl") }
+    public var appName: String { value("不眠之鸟", "WhiteNightBrid") }
     public var settingsMenuTitle: String { value("设置…", "Settings…") }
-    public var settingsWindowTitle: String { value("不休眠猫头鹰设置", "No Sleep Owl Settings") }
+    public var settingsWindowTitle: String { value("不眠之鸟设置", "WhiteNightBrid Settings") }
     public var languageLabel: String { value("语言", "Language") }
     public var simplifiedChinese: String { "简体中文" }
     public var english: String { "English" }
@@ -19,8 +19,8 @@ public struct AppStrings: Sendable {
     public var loginAtStartup: String { value("登录时自动启动", "Launch at Login") }
     public var allowBattery: String { value("使用电池时也允许合盖守夜", "Allow closed-lid watch on battery") }
     public var installHelper: String { value("安装 / 批准辅助程序", "Install / Approve Helper") }
-    public var openApplication: String { value("打开不休眠猫头鹰…", "Open No Sleep Owl…") }
-    public var quitApplication: String { value("退出不休眠猫头鹰", "Quit No Sleep Owl") }
+    public var openApplication: String { value("打开不眠之鸟…", "Open WhiteNightBrid…") }
+    public var quitApplication: String { value("退出不眠之鸟", "Quit WhiteNightBrid") }
     public var computerStatusChecking: String { value("电脑状态：正在获取应用占用", "Computer status: Checking application usage") }
     public var monitoringCheckingTitle: String { value("电脑状态 · 正在检查", "Computer Status · Checking") }
     public var applicationUsageTitle: String { value("应用占用", "Application Usage") }

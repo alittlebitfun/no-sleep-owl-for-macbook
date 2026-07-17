@@ -20,6 +20,9 @@ final class ControlWindowController: NSObject, NSWindowDelegate {
     private let batteryButton = NSButton(checkboxWithTitle: "使用电池时也允许合盖守夜", target: nil, action: nil)
     private let helperLabel = NSTextField(labelWithString: "")
     private let helperButton = NSButton(title: "安装 / 批准辅助程序", target: nil, action: nil)
+    private let settingsButton = NSButton(title: "设置…", target: nil, action: nil)
+    var onOpenSettings: (() -> Void)?
+    var onVisibilityChange: ((Bool) -> Void)?
     private let thermalView = ThermalStatusView()
     private var timer: Timer?
 
@@ -43,6 +46,7 @@ final class ControlWindowController: NSObject, NSWindowDelegate {
         NSApp.activate(ignoringOtherApps: true)
         window.center()
         window.makeKeyAndOrderFront(nil)
+        onVisibilityChange?(true)
         thermalMonitor.setWindowVisible(true)
         startTimer()
     }
@@ -63,6 +67,7 @@ final class ControlWindowController: NSObject, NSWindowDelegate {
         batteryButton.state = safetyMonitor.powerPolicy == .allowBattery ? .on : .off
         helperLabel.stringValue = sleepController.statusText(language: snapshot.language)
         helperButton.title = strings.installHelper
+        settingsButton.title = strings.settingsMenuTitle
         helperButton.isHidden = sleepController.isReady
         let mode = MonitoringDisplayPolicy.mode(thermal: snapshot.showsThermalStatus, applications: snapshot.showsHighUsageApps)
         thermalView.isHidden = mode == .hidden
@@ -74,6 +79,7 @@ final class ControlWindowController: NSObject, NSWindowDelegate {
         timer?.invalidate()
         timer = nil
         thermalMonitor.setWindowVisible(false)
+        onVisibilityChange?(false)
     }
 
     private func buildUI() {
@@ -100,9 +106,11 @@ final class ControlWindowController: NSObject, NSWindowDelegate {
         helperLabel.alignment = .center
         helperButton.target = self
         helperButton.action = #selector(registerHelper)
+        settingsButton.target = self
+        settingsButton.action = #selector(openSettings)
 
         thermalView.onTerminate = { [weak thermalMonitor] pid in thermalMonitor?.terminate(pid: pid) }
-        let stack = NSStackView(views: [emoji, titleLabel, detailLabel, durationLabel, toggleButton, thermalView, helperLabel, helperButton, batteryButton, loginButton, errorLabel])
+        let stack = NSStackView(views: [settingsButton, emoji, titleLabel, detailLabel, durationLabel, toggleButton, thermalView, helperLabel, helperButton, batteryButton, loginButton, errorLabel])
         stack.orientation = .vertical
         stack.alignment = .centerX
         stack.spacing = 18
@@ -152,4 +160,6 @@ final class ControlWindowController: NSObject, NSWindowDelegate {
         catch { store.setMessage(strings.helperRequestFailed(error.localizedDescription)) }
         refresh()
     }
+
+    @objc private func openSettings() { onOpenSettings?() }
 }

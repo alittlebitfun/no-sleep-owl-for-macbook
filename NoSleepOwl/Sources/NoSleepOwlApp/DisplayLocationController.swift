@@ -36,4 +36,12 @@ final class DisplayLocationController {
     }
 
     func refreshStatusItem() { statusController?.refresh() }
+
+    func setMainWindowVisible(_ visible: Bool) {
+        if visible {
+            NSApp.setActivationPolicy(.regular)
+        } else {
+            apply(preferences.snapshot)
+        }
+    }
 }

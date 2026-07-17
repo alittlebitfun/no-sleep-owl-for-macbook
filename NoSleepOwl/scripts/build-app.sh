@@ -2,7 +2,7 @@
 set -euo pipefail
 
 ROOT="${0:A:h:h}"
-APP="$ROOT/dist/不休眠猫头鹰.app"
+APP="$ROOT/dist/不眠之鸟.app"
 
 cd "$ROOT"
 swift build -c release --arch arm64

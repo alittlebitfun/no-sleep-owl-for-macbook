@@ -69,7 +69,7 @@ test("dynamic application copy is bilingual") {
     try expect(zh.loginAtStartup == "登录时自动启动", "Chinese login label")
     try expect(en.loginAtStartup == "Launch at Login", "English login label")
     try expect(zh.quitApplication.contains("退出"), "Chinese quit label")
-    try expect(en.quitApplication == "Quit No Sleep Owl", "English quit label")
+    try expect(en.quitApplication == "Quit WhiteNightBrid", "English quit label")
     try expect(en.helperApproved.contains("approved"), "English helper state")
     try expect(en.lowBatteryWarning.contains("20%"), "English battery warning")
     try expect(en.thermalWarning.lowercased().contains("thermal"), "English thermal warning")
@@ -305,7 +305,7 @@ test("helper disable restores original value") {
     try expect(helper.isEnabled == false, "helper must be disabled")
 }
 
-test("release metadata identifies version 0.1.0 build 8") {
+test("release metadata identifies version 0.1.0 build 9") {
     guard let root = ProcessInfo.processInfo.environment["NO_SLEEP_OWL_ROOT"] else {
         throw TestError.expectation("NO_SLEEP_OWL_ROOT must point to the repository root")
     }
@@ -315,7 +315,7 @@ test("release metadata identifies version 0.1.0 build 8") {
         throw TestError.expectation("Info.plist must contain a dictionary")
     }
     try expect(metadata["CFBundleShortVersionString"] as? String == "0.1.0", "release version must be 0.1.0")
-    try expect(metadata["CFBundleVersion"] as? String == "8", "release build must be 8")
+    try expect(metadata["CFBundleVersion"] as? String == "9", "release build must be 9")
 }
 
 if failures > 0 {
